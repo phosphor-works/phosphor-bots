@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 fuddlesworth
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# PROVIDE: wisp
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# Wisp, phosphor-works' Discord bot: daemon(8) runs it as the user wisp and
+# starts it again 30 s after it stops, its output in syslog (tag wisp). Its
+# tokens and channels are in wisp_env_file (root's, mode 600), which rc.subr
+# exports to it; what it keeps, in wisp_state (a folder only it reads).
+
+. /etc/rc.subr
+
+name=wisp
+rcvar=wisp_enable
+load_rc_config $name
+
+: ${wisp_enable:=NO}
+: ${wisp_env_file:=/usr/local/etc/wisp.env}
+: ${wisp_state:=/var/db/wisp/state.json}
+
+pidfile=/var/run/${name}.pid
+command=/usr/sbin/daemon
+command_args="-f -r -R 30 -S -T ${name} -u ${name} -P ${pidfile} /usr/local/libexec/${name}"
+start_precmd="${name}_precmd"
+
+wisp_precmd()
+{
+	if [ ! -s "${wisp_env_file}" ] || ! grep -q '^WISP_TOKEN=..*' "${wisp_env_file}"; then
+		echo "${wisp_env_file} has no WISP_TOKEN: fill it in first"
+		return 1
+	fi
+	install -d -o wisp -g wisp -m 700 "$(dirname "${wisp_state}")"
+	export WISP_STATE="${wisp_state}"
+}
+
+run_rc_command "$@"

@@ -1,0 +1,3 @@
+libexec/wisp
+etc/rc.d/wisp
+etc/wisp.env.sample

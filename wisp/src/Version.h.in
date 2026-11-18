@@ -1,0 +1,9 @@
+// SPDX-FileCopyrightText: 2026 fuddlesworth
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+namespace Wisp {
+inline constexpr const char* Version = "@WISP_VERSION@";
+inline constexpr const char* HomePage = "https://github.com/phosphor-works/phosphor-bots";
+} // namespace Wisp

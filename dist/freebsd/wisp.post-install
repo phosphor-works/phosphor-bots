@@ -1,0 +1,9 @@
+# The user the service runs as, and an env file to fill in, made once.
+r=${PKG_ROOTDIR:-}
+pw -R "${r:-/}" groupshow wisp > /dev/null 2>&1 || pw -R "${r:-/}" groupadd wisp
+pw -R "${r:-/}" usershow wisp > /dev/null 2>&1 ||
+	pw -R "${r:-/}" useradd wisp -g wisp -c "Wisp Discord bot" -d /nonexistent -s /usr/sbin/nologin
+if [ ! -e "$r${PKG_PREFIX}/etc/wisp.env" ]; then
+	install -m 600 "$r${PKG_PREFIX}/etc/wisp.env.sample" "$r${PKG_PREFIX}/etc/wisp.env"
+	echo "wisp: fill in ${PKG_PREFIX}/etc/wisp.env, then: sysrc wisp_enable=YES; service wisp start"
+fi
