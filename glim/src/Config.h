@@ -33,6 +33,12 @@ struct Config
     std::string statePath; ///< GLIM_STATE
     std::chrono::seconds pollInterval{300}; ///< GLIM_POLL_SECONDS: how often it looks at the issues
     std::size_t textLimit = 32 * 1024; ///< GLIM_TEXT_LIMIT: an attached log's bytes put in the issue
+    /// GLIM_FILES_DIR: where attachments are kept for the issues, served at
+    /// GLIM_FILES_URL; empty: none kept, each only named.
+    std::string filesDir;
+    std::string filesUrl; ///< GLIM_FILES_URL, https://...
+    std::size_t fileLimit = 25 * 1024 * 1024; ///< GLIM_FILE_MIB: one file's bytes at most
+    std::size_t postLimit = 100 * 1024 * 1024; ///< GLIM_POST_MIB: a filing's files' bytes at most
 };
 
 /// Reads @p env. Throws std::runtime_error naming the key and the mistake.

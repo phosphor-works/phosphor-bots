@@ -7,6 +7,7 @@ configure_file(src/Version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h 
 add_library(glim_core STATIC
     src/Config.cpp
     src/Glim.cpp
+    src/Media.cpp
     src/Report.cpp
     src/State.cpp
 )
@@ -21,6 +22,7 @@ if(BUILD_TESTING)
     add_executable(glim_tests
         tests/ConfigTest.cpp
         tests/GlimTest.cpp
+        tests/MediaTest.cpp
         tests/ReportTest.cpp
         tests/StateTest.cpp
     )

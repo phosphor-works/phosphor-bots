@@ -16,9 +16,9 @@ namespace Glim {
 namespace {
 
 const std::set<std::string, std::less<>> KnownKeys = {
-    "GLIM_TOKEN",     "GLIM_APP_ID",       "GLIM_APP_KEY",     "GLIM_ORG",        "GLIM_FORUMS",
-    "GLIM_TAG_REPOS", "GLIM_ALIASES",      "GLIM_STAFF_ROLES", "GLIM_SOLVED_TAG", "GLIM_LABELS",
-    "GLIM_STATE",     "GLIM_POLL_SECONDS", "GLIM_TEXT_LIMIT",
+    "GLIM_TOKEN",      "GLIM_APP_ID",      "GLIM_APP_KEY",    "GLIM_ORG",      "GLIM_FORUMS",   "GLIM_TAG_REPOS",
+    "GLIM_ALIASES",    "GLIM_STAFF_ROLES", "GLIM_SOLVED_TAG", "GLIM_LABELS",   "GLIM_STATE",    "GLIM_POLL_SECONDS",
+    "GLIM_TEXT_LIMIT", "GLIM_FILES_DIR",   "GLIM_FILES_URL",  "GLIM_FILE_MIB", "GLIM_POST_MIB",
 };
 
 [[noreturn]] void fail(std::string_view key, std::string_view why)
@@ -141,6 +141,21 @@ Config parseConfig(const std::map<std::string, std::string>& env)
         config.pollInterval = std::chrono::seconds(number("GLIM_POLL_SECONDS", value, 60, 3600));
     if (const auto value = get("GLIM_TEXT_LIMIT"); !value.empty())
         config.textLimit = std::size_t(number("GLIM_TEXT_LIMIT", value, 1024, 60000));
+    config.filesDir = get("GLIM_FILES_DIR");
+    config.filesUrl = get("GLIM_FILES_URL");
+    while (config.filesUrl.ends_with('/'))
+        config.filesUrl.pop_back();
+    if (!config.filesDir.empty() && config.filesDir.front() != '/')
+        fail("GLIM_FILES_DIR", "an absolute path");
+    if (config.filesDir.empty() != config.filesUrl.empty())
+        fail(config.filesDir.empty() ? "GLIM_FILES_DIR" : "GLIM_FILES_URL",
+             "GLIM_FILES_DIR and GLIM_FILES_URL go together");
+    if (!config.filesUrl.empty() && !config.filesUrl.starts_with("https://"))
+        fail("GLIM_FILES_URL", "an address that starts with https://");
+    if (const auto value = get("GLIM_FILE_MIB"); !value.empty())
+        config.fileLimit = std::size_t(number("GLIM_FILE_MIB", value, 1, 500)) << 20;
+    if (const auto value = get("GLIM_POST_MIB"); !value.empty())
+        config.postLimit = std::size_t(number("GLIM_POST_MIB", value, 1, 2000)) << 20;
     return config;
 }
 

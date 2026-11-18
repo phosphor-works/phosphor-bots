@@ -62,14 +62,24 @@ std::string messageText(const Message& message, Participants& participants, cons
         out += text + "\n\n";
     std::vector<std::string> others;
     for (const auto& attachment : message.attachments) {
+        const std::string name = anonymize(attachment.name, participants);
         if (attachment.text) {
             const std::string body = cut(*attachment.text, limits.text);
             const std::string fence = fenceFor(body);
-            out += std::format("<details><summary>📄 {} ({}){}</summary>\n\n{}text\n{}\n{}\n\n</details>\n\n",
-                               anonymize(attachment.name, participants), size(attachment.size),
-                               body.size() < attachment.text->size() ? ", cut" : "", fence, body, fence);
+            const std::string whole = attachment.publicUrl.empty()
+                ? std::string()
+                : std::format("📄 [The whole file]({})\n\n", attachment.publicUrl);
+            out += std::format("<details><summary>📄 {} ({}){}</summary>\n\n{}text\n{}\n{}\n\n</details>\n\n{}", name,
+                               size(attachment.size), body.size() < attachment.text->size() ? ", cut" : "", fence, body,
+                               fence, whole);
+        } else if (attachment.kind == "image") {
+            out += std::format("![{}]({})\n\n", name, attachment.publicUrl);
+        } else if (attachment.kind == "video") {
+            out += std::format("🎬 [{}]({}) ({})\n\n", name, attachment.publicUrl, size(attachment.size));
+        } else if (!attachment.publicUrl.empty()) {
+            out += std::format("📦 [{}]({}) ({})\n\n", name, attachment.publicUrl, size(attachment.size));
         } else {
-            others.push_back(anonymize(attachment.name, participants));
+            others.push_back(name);
         }
     }
     if (!others.empty()) {

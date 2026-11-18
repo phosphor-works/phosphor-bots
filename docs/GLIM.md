@@ -32,9 +32,18 @@ A GitHub issue is public. Glim writes:
 - Each author as **Reporter** (the person who opened the post) or **Member N**. One person keeps the same number in
   the issue and its comments. A mention of someone becomes their name in the issue.
 - An `@word` with a zero-width space after the `@`, so that it pings no one on GitHub.
-- Each attached text file (a log, a configuration) in the issue, cut to `GLIM_TEXT_LIMIT` bytes. Pictures and other
-  files are named, with a note that they are in the Discord post. Discord's links to files end after a day, so the
-  issue does not link them.
+- The attached files, kept on our server (`GLIM_FILES_DIR`, served at `GLIM_FILES_URL`) since GitHub's API takes
+  no files and Discord's links to files end after a day:
+  - pictures (PNG, JPEG, WebP, GIF), shown in the issue;
+  - videos (MP4, MOV, WebM), linked;
+  - text files (a log, a configuration), put in the issue cut to `GLIM_TEXT_LIMIT` bytes, and linked whole;
+  - archives (zip, gz, xz, zst, 7z), linked as downloads.
+
+  A file's kind is read from its bytes, never from its name, and another kind of file is only named. Before a file is
+  kept, its metadata goes: a photo's EXIF (its place, its camera, its time) but its orientation, XMP and IPTC, PNG's
+  text and time, a GIF's comments, an MP4's or a MOV's user data and location, a WebM's tags. A text file's home
+  folders become `~`. The file's address holds the post's id and a number, not its name. At most `GLIM_FILE_MIB` MiB a
+  file and `GLIM_POST_MIB` MiB a filing are kept.
 - A link to the Discord post, which only members of the server can open.
 
 An issue or a comment holds at most 60000 characters. The messages past that are counted, with a link to the post.
@@ -68,6 +77,10 @@ that Glim does not know stops it, and the log names the key.
 | `GLIM_STATE` | none | the file of its state. The service sets it |
 | `GLIM_POLL_SECONDS` | 300 | the time between looks at the issues, 60 to 3600 |
 | `GLIM_TEXT_LIMIT` | 32768 | the bytes of each attached text file in the issue, 1024 to 60000 |
+| `GLIM_FILES_DIR` | none | the folder where attachments are kept; with `GLIM_FILES_URL` |
+| `GLIM_FILES_URL` | none | the HTTPS address that serves `GLIM_FILES_DIR` |
+| `GLIM_FILE_MIB` | 25 | the MiB of one kept file at most |
+| `GLIM_POST_MIB` | 100 | the MiB of a filing's kept files at most |
 
 ## Install
 
@@ -83,7 +96,8 @@ In the organization's settings, under Developer settings, GitHub Apps, select Ne
    permission.
 5. Where can this GitHub App be installed: **Only on this account**.
 6. Create the app. Note its **App ID**.
-7. Generate a private key. GitHub downloads a `.pem` file.
+7. In the left sidebar, select **Credentials**, then **Key pairs**, then **New key**. GitHub downloads a `.pem` file,
+   and keeps only its public half.
 8. Install the app on the organization, on all repositories.
 
 ### The Discord application
@@ -97,6 +111,13 @@ In the Discord Developer Portal:
    Links, Read Message History, and Manage Threads (to add the solved tag to someone's post):
 
        https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permissions=292057861120
+
+### The files' server
+
+Serve `GLIM_FILES_DIR` read-only from another jail, so that the jail that answers the internet holds no token and
+cannot change the files. Serve only the names Glim writes (`/<post>/<message>-<n>.<extension>`), with
+`X-Content-Type-Options: nosniff`, a Content-Security-Policy of `default-src 'none'; img-src 'self'; media-src 'self';
+sandbox`, and archives with `Content-Disposition: attachment`. To take a file down, delete it from the folder.
 
 ### The service
 

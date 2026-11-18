@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace Bots {
@@ -30,10 +31,10 @@ std::optional<std::string> readFile(const std::string& path, std::string* error)
     return text.str();
 }
 
-bool writeFileAtomically(const std::string& path, const std::string& text, const char* area)
+bool writeFileAtomically(const std::string& path, const std::string& text, const char* area, unsigned mode)
 {
     const std::string temporary = path + ".new";
-    const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
     if (fd < 0) {
         Log::info(area, "{}: {}", temporary, std::strerror(errno));
         return false;
@@ -51,7 +52,9 @@ bool writeFileAtomically(const std::string& path, const std::string& text, const
         }
         written += std::size_t(n);
     }
-    if (::fsync(fd) != 0 || ::close(fd) != 0 || std::rename(temporary.c_str(), path.c_str()) != 0) {
+    // open() keeps what the umask takes away; the mode asked for is the mode.
+    if (::fchmod(fd, mode_t(mode)) != 0 || ::fsync(fd) != 0 || ::close(fd) != 0
+        || std::rename(temporary.c_str(), path.c_str()) != 0) {
         Log::info(area, "{}: {}", path, std::strerror(errno));
         ::unlink(temporary.c_str());
         return false;

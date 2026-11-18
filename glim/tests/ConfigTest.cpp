@@ -83,3 +83,18 @@ TEST(GlimConfig, Mistakes)
     env["GLIM_TAG_REPOS"] = "plasmazones";
     EXPECT_NE(failure(env).find("name=Repository"), std::string::npos);
 }
+
+TEST(GlimConfig, Files)
+{
+    auto env = base();
+    env["GLIM_FILES_DIR"] = "/var/db/glim-files";
+    env["GLIM_FILES_URL"] = "https://issues.phosphor-works.org/";
+    env["GLIM_FILE_MIB"] = "10";
+    const Config config = parseConfig(env);
+    EXPECT_EQ(config.filesUrl, "https://issues.phosphor-works.org");
+    EXPECT_EQ(config.fileLimit, std::size_t(10) << 20);
+    env.erase("GLIM_FILES_URL");
+    EXPECT_NE(failure(env).find("go together"), std::string::npos);
+    env["GLIM_FILES_URL"] = "http://x";
+    EXPECT_NE(failure(env).find("https"), std::string::npos);
+}

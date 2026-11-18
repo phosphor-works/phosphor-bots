@@ -15,6 +15,7 @@ std::optional<std::string> readFile(const std::string& path, std::string* error 
 /// Writes @p text to @p path through a new file (mode 600), fsync and a
 /// rename, so that a crash leaves the old one whole. False, said in the log
 /// under @p area, on failure.
-bool writeFileAtomically(const std::string& path, const std::string& text, const char* area = "state");
+bool writeFileAtomically(const std::string& path, const std::string& text, const char* area = "state",
+                         unsigned mode = 0600);
 
 } // namespace Bots

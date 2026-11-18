@@ -27,6 +27,10 @@ struct Attachment
     long long size = 0;
     std::string url;
     std::optional<std::string> text; ///< a text file's bytes, once downloaded
+    /// Where the file is kept for the issue, and what it is: "image", "video",
+    /// "text" or "file". Empty: only named.
+    std::string publicUrl{};
+    std::string kind{};
 };
 
 struct Message

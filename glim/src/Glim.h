@@ -49,6 +49,10 @@ private:
     /// The post's messages after @p after, oldest first, without bots' and
     /// without the bare mentions of Glim; their text files downloaded.
     std::optional<std::vector<Report::Message>> collect(Snowflake thread, Snowflake after, Snowflake* newest);
+    /// Downloads an attachment within @p budget (bytes left for this
+    /// filing), strips its metadata and keeps it for the issue; a text file's
+    /// bytes go in @p attachment for the issue too.
+    void keep(Snowflake thread, Snowflake message, int index, Report::Attachment& attachment, std::size_t& budget);
     void reply(Snowflake channel, Snowflake to, const std::string& text);
     /// An embed in Glim's look; Discord's status of the post.
     long tell(Snowflake channel, std::optional<Snowflake> to, const std::string& title, const std::string& url,

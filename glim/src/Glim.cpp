@@ -3,11 +3,14 @@
 
 #include "Glim.h"
 
+#include "Files.h"
 #include "Gateway.h"
+#include "Media.h"
 #include "Version.h"
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <format>
 #include <set>
 
@@ -281,6 +284,7 @@ std::optional<std::vector<Report::Message>> Bot::collect(Snowflake thread, Snowf
     *newest = cursor;
 
     std::vector<Report::Message> out;
+    std::size_t budget = m_config.postLimit;
     for (const auto& message : raw) {
         const Json& author = message.contains("author") ? message["author"] : Json();
         if (!author.is_object() || author.value("bot", false) || message.contains("webhook_id"))
@@ -291,19 +295,16 @@ std::optional<std::vector<Report::Message>> Bot::collect(Snowflake thread, Snowf
                                message.value("timestamp", ""),
                                {}};
         if (message.contains("attachments") && message["attachments"].is_array()) {
+            int index = 0;
             for (const auto& file : message["attachments"]) {
-                Report::Attachment attachment{file.value("filename", "file"), file.value("content_type", ""),
-                                              file.value("size", 0LL), file.value("url", ""), std::nullopt};
-                // Only a file small enough to be put whole is read whole;
-                // a larger one is cut, never read past twice the limit.
-                if (Report::isText(attachment) && attachment.url.starts_with("https://")
-                    && std::size_t(attachment.size) <= 4 * 1024 * 1024) {
-                    HttpRequest request;
-                    request.url = attachment.url;
-                    const HttpResponse response = m_fetch(request);
-                    if (response.status == 200)
-                        attachment.text = response.body;
-                }
+                Report::Attachment attachment{file.value("filename", "file"),
+                                              file.value("content_type", ""),
+                                              file.value("size", 0LL),
+                                              file.value("url", ""),
+                                              std::nullopt,
+                                              {},
+                                              {}};
+                keep(thread, parsed.id, ++index, attachment, budget);
                 parsed.attachments.push_back(std::move(attachment));
             }
         }
@@ -312,6 +313,60 @@ std::optional<std::vector<Report::Message>> Bot::collect(Snowflake thread, Snowf
         out.push_back(std::move(parsed));
     }
     return out;
+}
+
+void Bot::keep(Snowflake thread, Snowflake message, int index, Report::Attachment& attachment, std::size_t& budget)
+{
+    const bool textName = Report::isText(attachment);
+    const std::size_t limit = m_config.filesDir.empty() ? std::size_t(4) << 20 : m_config.fileLimit;
+    // Without a folder for files only text is read, to be put in the issue.
+    if ((!textName && m_config.filesDir.empty()) || !attachment.url.starts_with("https://") || attachment.size <= 0
+        || std::size_t(attachment.size) > std::min(limit, budget))
+        return;
+    HttpRequest request;
+    request.url = attachment.url;
+    const HttpResponse response = m_fetch(request);
+    if (response.status != 200 || response.body.size() > std::min(limit, budget))
+        return;
+    budget -= response.body.size();
+
+    const auto type = Media::sniff(response.body, textName);
+    if (!type)
+        return; // an unknown kind of file: named only
+    auto bytes = Media::strip(response.body, *type);
+    if (!bytes) {
+        Log::info("glim", "post {}: {} is no whole {}; named only", thread, index, type->extension);
+        return;
+    }
+    if (type->kind == Media::Kind::Text)
+        attachment.text = *bytes;
+    if (m_config.filesDir.empty())
+        return;
+
+    // The name in the address says nothing of the file's own name.
+    const std::string folder = std::format("{}/{}", m_config.filesDir, thread);
+    const std::string name = std::format("{}-{}.{}", message, index, type->extension);
+    std::error_code error;
+    std::filesystem::create_directories(folder, error);
+    std::filesystem::permissions(folder, std::filesystem::perms(0755), error);
+    if (!writeFileAtomically(folder + "/" + name, *bytes, "files", 0644))
+        return;
+    attachment.publicUrl = std::format("{}/{}/{}", m_config.filesUrl, thread, name);
+    attachment.size = (long long)bytes->size();
+    switch (type->kind) {
+    case Media::Kind::Image:
+        attachment.kind = "image";
+        break;
+    case Media::Kind::Video:
+        attachment.kind = "video";
+        break;
+    case Media::Kind::Text:
+        attachment.kind = "text";
+        break;
+    case Media::Kind::Archive:
+        attachment.kind = "file";
+        break;
+    }
 }
 
 void Bot::file(const Json& message, const Json& thread, const std::string& words)

@@ -21,6 +21,7 @@ load_rc_config $name
 : ${glim_enable:=NO}
 : ${glim_env_file:=/usr/local/etc/glim.env}
 : ${glim_state:=/var/db/glim/state.json}
+: ${glim_files:=/var/db/glim-files}         # what GLIM_FILES_DIR names, served read-only by a web jail
 
 pidfile=/var/run/${name}.pid
 command=/usr/sbin/daemon
@@ -38,6 +39,8 @@ glim_precmd()
 		return 1
 	fi
 	install -d -o glim -g glim -m 700 "$(dirname "${glim_state}")"
+	# Glim writes the attachments it keeps here; a web server reads them.
+	install -d -o glim -g glim -m 755 "${glim_files}"
 	export GLIM_STATE="${glim_state}"
 }
 

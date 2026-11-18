@@ -5,6 +5,9 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
+#include <memory>
 #include <format>
 
 using namespace Glim;
@@ -42,8 +45,10 @@ struct World
     Config config;
     std::unique_ptr<Bot> bot;
 
-    World()
+    explicit World(std::string filesDir = {})
     {
+        config.filesDir = filesDir;
+        config.filesUrl = filesDir.empty() ? std::string() : std::string("https://issues.example");
         config.token = "t";
         config.forums = {Forum};
         config.tagRepos = {{"plasmazones", "PlasmaZones"}, {"afterglow", "Afterglow"}};
@@ -70,8 +75,17 @@ struct World
 
     HttpResponse discord(const HttpRequest& r)
     {
+        if (r.url.starts_with("https://cdn.discordapp.com/attachments/shot.png"))
+            return {200,
+                    {},
+                    std::string("\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\1\1\1\1\1\1\1\1\1\1\1\1\1\0\0\0\0"
+                                "\0\0\0\x0btEXtAuthor\0Jane\0\0\0\0\0\0\0\0IEND\0\0\0\0",
+                                8 + 25 + 23 + 12),
+                    {}};
+        if (r.url.starts_with("https://cdn.discordapp.com/attachments/run.exe"))
+            return {200, {}, "MZ an executable", {}};
         if (r.url.starts_with("https://cdn.discordapp.com/"))
-            return {200, {}, "log line 1\nlog line 2", {}};
+            return {200, {}, "log line 1\nlog line 2 /home/jane/.config", {}};
         const std::string path = r.url.substr(std::string("https://discord.com/api/v10").size());
         if (r.method == "GET" && path == std::format("/channels/{}", Post))
             return json(thread);
@@ -309,4 +323,44 @@ TEST(Glim, TextFilesAreRead)
     w.say(Owner, "<@999>");
     ASSERT_EQ(w.issues.size(), 1u);
     EXPECT_NE(std::string(w.issues[0].second["body"]).find("log line 2"), std::string::npos);
+}
+
+TEST(Glim, AttachmentsAreKeptWithoutTheirMetadata)
+{
+    const auto dir = std::filesystem::temp_directory_path() / ("glim-files-" + std::to_string(::getpid()));
+    World w(dir.string());
+    Json m = w.message(Owner, "screenshot and log");
+    m["attachments"] = Json::array({{{"filename", "Screenshot_jane.png"},
+                                     {"content_type", "image/png"},
+                                     {"size", 67},
+                                     {"url", "https://cdn.discordapp.com/attachments/shot.png"}},
+                                    {{"filename", "kwin.log"},
+                                     {"content_type", "text/plain"},
+                                     {"size", 40},
+                                     {"url", "https://cdn.discordapp.com/attachments/kwin.log"}},
+                                    {{"filename", "run.exe"},
+                                     {"content_type", "application/octet-stream"},
+                                     {"size", 16},
+                                     {"url", "https://cdn.discordapp.com/attachments/run.exe"}}});
+    w.messages.push_back(m);
+    w.say(Owner, "<@999>");
+    ASSERT_EQ(w.issues.size(), 1u);
+    const std::string body = w.issues[0].second["body"];
+    const std::string id = m["id"];
+    EXPECT_NE(body.find(std::format("![Screenshot_jane.png](https://issues.example/{}/{}-1.png)", Post, id)),
+              std::string::npos)
+        << body;
+    EXPECT_NE(body.find(std::format("📄 [The whole file](https://issues.example/{}/{}-2.txt)", Post, id)),
+              std::string::npos);
+    EXPECT_NE(body.find("~/.config"), std::string::npos) << "a home folder in a log";
+    EXPECT_EQ(body.find("jane/.config"), std::string::npos);
+    EXPECT_NE(body.find("Attached in the Discord post: `run.exe`"), std::string::npos) << "an unknown kind is named";
+
+    const auto png = dir / std::to_string(Post) / (id + "-1.png");
+    ASSERT_TRUE(std::filesystem::exists(png));
+    EXPECT_EQ(std::filesystem::status(png).permissions() & std::filesystem::perms::all, std::filesystem::perms(0644));
+    std::string kept((std::istreambuf_iterator<char>(*std::make_unique<std::ifstream>(png))), {});
+    EXPECT_EQ(kept.find("Jane"), std::string::npos) << "the PNG's text chunk";
+    EXPECT_EQ(std::distance(std::filesystem::directory_iterator(dir / std::to_string(Post)), {}), 2);
+    std::filesystem::remove_all(dir);
 }
