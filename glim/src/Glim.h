@@ -5,7 +5,9 @@
 
 #include "Common.h"
 #include "Config.h"
+#include "AccessJwt.h"
 #include "GatewaySession.h"
+#include "HttpServer.h"
 #include "Report.h"
 #include "State.h"
 
@@ -13,6 +15,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <functional>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -41,6 +45,18 @@ public:
         return m_state;
     }
 
+    /// Checks a staff request's Access token: the email it is for, or nothing.
+    using Verifier = std::function<std::optional<std::string>(const std::string& token, std::string* why)>;
+    void setVerifier(Verifier verifier)
+    {
+        m_verify = std::move(verifier);
+    }
+    /// A request of the staff API (/staff/api/...), from its listener's
+    /// thread; the action itself runs on the bot's.
+    ServerResponse staffRequest(const ServerRequest& request);
+    /// The JSON the issues page reads: api/posts.json and api/p/<post>.json.
+    void publish();
+
 private:
     void mentioned(const nlohmann::json& message);
     void file(const nlohmann::json& message, const nlohmann::json& thread, const std::string& words);
@@ -60,6 +76,15 @@ private:
     bool addTag(Snowflake thread, const std::string& tag);
     std::string withoutMention(std::string_view content) const;
     void save();
+    /// The comment of what is new in a filed post since its last update;
+    /// what happened, for the log or the page. @p requester 0: staff on the
+    /// page; @p replyTo: the mention to answer, if any.
+    std::string update(Snowflake channel, Snowflake requester, std::optional<Snowflake> replyTo);
+    void keepFiles(PostRecord& record, const std::vector<Report::Message>& messages);
+    ServerResponse staffAction(const ServerRequest& request, const std::string& email);
+    /// Runs @p job on the bot's thread and waits for it (at once, before run()).
+    ServerResponse onBotThread(std::function<ServerResponse()> job);
+    std::int64_t now() const;
 
     Config m_config;
     Discord m_discord;
@@ -77,6 +102,11 @@ private:
     std::deque<GatewayEvent> m_events;
     std::string m_fatal;
     std::atomic<bool> m_stop{false};
+    std::atomic<bool> m_running{false};
+    std::deque<std::function<void()>> m_jobs;
+    std::unique_ptr<AccessJwt> m_access;
+    Verifier m_verify;
+    std::unique_ptr<HttpServer> m_server;
 };
 
 } // namespace Glim

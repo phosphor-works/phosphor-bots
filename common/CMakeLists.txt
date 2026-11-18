@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 add_library(bots_common STATIC
+    src/AccessJwt.cpp
     src/Discord.cpp
     src/Files.cpp
     src/Gateway.cpp
@@ -9,6 +10,7 @@ add_library(bots_common STATIC
     src/GitHub.cpp
     src/GitHubApp.cpp
     src/Http.cpp
+    src/HttpServer.cpp
     src/Log.cpp
     src/Service.cpp
 )
@@ -17,10 +19,12 @@ target_link_libraries(bots_common PUBLIC CURL::libcurl OpenSSL::Crypto Threads::
 
 if(BUILD_TESTING)
     add_executable(bots_common_tests
+        tests/AccessJwtTest.cpp
         tests/DiscordTest.cpp
         tests/GatewaySessionTest.cpp
         tests/GitHubAppTest.cpp
         tests/GitHubTest.cpp
+        tests/HttpServerTest.cpp
     )
     target_link_libraries(bots_common_tests PRIVATE bots_common GTest::gtest_main)
     gtest_discover_tests(bots_common_tests)

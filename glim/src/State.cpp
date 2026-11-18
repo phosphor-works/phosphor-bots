@@ -20,6 +20,22 @@ Snowflake snowflake(const Json& json, const char* key)
 
 } // namespace
 
+Json filesJson(const std::vector<KeptFile>& files, bool forPublic)
+{
+    Json out = Json::array();
+    for (const auto& file : files) {
+        if (forPublic && file.removed)
+            continue;
+        Json entry = {{"name", file.name}, {"kind", file.kind}, {"size", file.size}, {"url", file.url}};
+        if (!forPublic) {
+            entry["path"] = file.path;
+            entry["removed"] = file.removed;
+        }
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
 Json toJson(const State& state)
 {
     Json posts = Json::object();
@@ -33,7 +49,12 @@ Json toJson(const State& state)
                                      {"last", std::to_string(post.lastMessage)},
                                      {"reporter", std::to_string(post.participants.reporter)},
                                      {"members", members},
-                                     {"state", post.issueState}};
+                                     {"state", post.issueState},
+                                     {"title", post.title},
+                                     {"filed", post.filedAt},
+                                     {"updated", post.updatedAt},
+                                     {"discord", post.discordUrl},
+                                     {"files", filesJson(post.files)}};
     }
     return {{"format", Format}, {"posts", posts}};
 }
@@ -60,6 +81,16 @@ State stateFromJson(const Json& json)
             }
         }
         record.issueState = post.value("state", "open");
+        record.title = post.value("title", "");
+        record.filedAt = post.value("filed", std::int64_t(0));
+        record.updatedAt = post.value("updated", std::int64_t(0));
+        record.discordUrl = post.value("discord", "");
+        if (post.contains("files") && post["files"].is_array()) {
+            for (const auto& file : post["files"]) {
+                record.files.push_back({file.value("name", ""), file.value("kind", ""), file.value("size", 0LL),
+                                        file.value("url", ""), file.value("path", ""), file.value("removed", false)});
+            }
+        }
         state.posts[*thread] = std::move(record);
     }
     return state;

@@ -56,6 +56,28 @@ Every `GLIM_POLL_SECONDS`, Glim looks at the issues of the posts it filed. When 
 post. When the issue is completed, it also adds the forum tag `GLIM_SOLVED_TAG` to the post. When an issue opens
 again, Glim says that too.
 
+## The issues page
+
+Glim writes what the issues page shows into `GLIM_FILES_DIR/api/`: `posts.json`, each filed post with its repository,
+issue, state, dates and number of kept files, and `p/<post>.json`, one post with its files. It holds the issue's title
+and the post's id, as the files' addresses do, and no Discord name or id of a person. The page itself is built by the
+website (phosphor-works/website) and served beside the files.
+
+With `GLIM_STAFF_LISTEN`, Glim also answers its staff on `/staff/api/`:
+
+| Request | Does |
+| --- | --- |
+| `GET /staff/api/me` | says who is signed in |
+| `GET /staff/api/posts` | each filed post, with its files and the ones taken down |
+| `POST /staff/api/posts/<post>/update` | adds what is new in the post to its issue, and tells the post |
+| `POST /staff/api/posts/<post>/files/<n>/remove` | takes the post's file `<n>` (from 1) down |
+| `POST /staff/api/posts/<post>/unlink` | stops following the post; `?files=remove` takes its files down too |
+
+Cloudflare Access stands in front of `/staff`. Glim checks the token that Access puts on each request
+(`Cf-Access-Jwt-Assertion`: signed by the team's keys, for the application `GLIM_ACCESS_AUD`, not expired), so a
+request that reaches the API another way is refused. A `POST` also needs the header `X-Glim-Staff`, which a form of
+another site cannot send. Each action is logged with the staff member's email.
+
 ## Settings
 
 Glim reads its settings from the environment. The service exports them from `/usr/local/etc/glim.env`. The service reads that file as shell, so separate the items of a list with commas, with no spaces: in
@@ -81,6 +103,10 @@ that Glim does not know stops it, and the log names the key.
 | `GLIM_FILES_URL` | none | the HTTPS address that serves `GLIM_FILES_DIR` |
 | `GLIM_FILE_MIB` | 25 | the MiB of one kept file at most |
 | `GLIM_POST_MIB` | 100 | the MiB of a filing's kept files at most |
+| `GLIM_STAFF_LISTEN` | none (no staff API) | the address and port of the staff API, a jail's: `10.17.0.7:8090` |
+| `GLIM_ACCESS_TEAM` | none | the Cloudflare Zero Trust team in front of the staff API |
+| `GLIM_ACCESS_AUD` | none | the AUD tag of its Access application |
+| `GLIM_STAFF_EMAILS` | anyone Access lets in | the emails that may act, separated by commas |
 
 ## Install
 

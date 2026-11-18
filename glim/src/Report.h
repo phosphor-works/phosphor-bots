@@ -31,6 +31,7 @@ struct Attachment
     /// "text" or "file". Empty: only named.
     std::string publicUrl{};
     std::string kind{};
+    std::string keptPath{}; ///< under GLIM_FILES_DIR
 };
 
 struct Message

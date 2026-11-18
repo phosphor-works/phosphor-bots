@@ -210,7 +210,7 @@ std::string issueBody(const std::string& postUrl, const std::vector<Message>& me
     return std::format(
                "_Filed by Glim from a [post]({}) in the #help forum of the Phosphor Works Discord, at the "
                "request of {}. Discord names are not shown: Reporter opened the post._\n\n",
-               postUrl, participants.name(requester))
+               postUrl, requester ? participants.name(requester) : std::string("staff, on the issues page"))
         + body;
 }
 
@@ -220,7 +220,7 @@ std::string updateComment(const std::string& postUrl, const std::vector<Message>
     const std::string body =
         transcript(messages, participants, limits, limits.total - std::min(limits.total, std::size_t(600)), postUrl);
     return std::format("_New in the [Discord post]({}) since the last update, added by Glim at the request of {}._\n\n",
-                       postUrl, participants.name(requester))
+                       postUrl, requester ? participants.name(requester) : std::string("staff, on the issues page"))
         + body;
 }
 

@@ -39,6 +39,12 @@ struct Config
     std::string filesUrl; ///< GLIM_FILES_URL, https://...
     std::size_t fileLimit = 25 * 1024 * 1024; ///< GLIM_FILE_MIB: one file's bytes at most
     std::size_t postLimit = 100 * 1024 * 1024; ///< GLIM_POST_MIB: a filing's files' bytes at most
+    /// GLIM_STAFF_LISTEN: where the staff API listens ("10.17.0.7:8090"),
+    /// behind Cloudflare Access; empty: no staff API.
+    std::string staffListen;
+    std::string accessTeam; ///< GLIM_ACCESS_TEAM: <team>.cloudflareaccess.com
+    std::string accessAud; ///< GLIM_ACCESS_AUD: the Access application's AUD tag
+    std::set<std::string> staffEmails; ///< GLIM_STAFF_EMAILS: who may act; empty: whom Access lets in
 };
 
 /// Reads @p env. Throws std::runtime_error naming the key and the mistake.

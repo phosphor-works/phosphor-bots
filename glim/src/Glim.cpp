@@ -4,6 +4,7 @@
 #include "Glim.h"
 
 #include "Files.h"
+#include "Http.h"
 #include "Gateway.h"
 #include "Media.h"
 #include "Version.h"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <future>
 #include <format>
 #include <set>
 
@@ -79,6 +81,12 @@ Bot::Bot(Config config, HttpTransport discordTransport, HttpTransport githubTran
         if (auto loaded = loadState(m_config.statePath))
             m_state = std::move(*loaded);
     }
+    if (!m_config.accessTeam.empty()) {
+        m_access = std::make_unique<AccessJwt>(m_config.accessTeam, m_config.accessAud, makeCurlTransport());
+        m_verify = [this](const std::string& token, std::string* why) {
+            return m_access->verify(token, why);
+        };
+    }
     for (const auto& map : {m_config.tagRepos, m_config.aliases}) {
         for (const auto& [name, repo] : map)
             m_knownRepos[lower(repo)] = repo;
@@ -119,25 +127,45 @@ int Bot::run()
             m_wake.notify_one();
         });
     gateway.start();
+    m_running = true;
+    if (!m_config.staffListen.empty()) {
+        m_server = std::make_unique<HttpServer>([this](const ServerRequest& request) {
+            return staffRequest(request);
+        });
+        if (!m_server->start(m_config.staffListen))
+            m_server.reset();
+    }
+    publish();
     auto nextRound = SteadyClock::now() + std::chrono::seconds(30);
     while (true) {
         std::deque<GatewayEvent> events;
+        std::deque<std::function<void()>> jobs;
         {
             std::unique_lock lock(m_mutex);
             m_wake.wait_until(lock, std::min(nextRound, SteadyClock::now() + std::chrono::seconds(1)), [this] {
-                return !m_events.empty() || m_stop;
+                return !m_events.empty() || !m_jobs.empty() || m_stop;
             });
             if (m_stop)
                 break;
             events.swap(m_events);
+            jobs.swap(m_jobs);
         }
         for (const auto& event : events)
             handle(event);
+        for (auto& job : jobs)
+            job();
         if (SteadyClock::now() >= nextRound) {
             round();
             nextRound = SteadyClock::now() + m_config.pollInterval;
         }
     }
+    if (m_server)
+        m_server->stop();
+    m_running = false;
+    // A staff request still waiting gets its answer: the bot is going.
+    for (auto& job : m_jobs)
+        job();
+    m_jobs.clear();
     gateway.stop();
     save();
     if (!m_fatal.empty()) {
@@ -352,6 +380,7 @@ void Bot::keep(Snowflake thread, Snowflake message, int index, Report::Attachmen
     if (!writeFileAtomically(folder + "/" + name, *bytes, "files", 0644))
         return;
     attachment.publicUrl = std::format("{}/{}/{}", m_config.filesUrl, thread, name);
+    attachment.keptPath = std::format("{}/{}", thread, name);
     attachment.size = (long long)bytes->size();
     switch (type->kind) {
     case Media::Kind::Image:
@@ -369,6 +398,58 @@ void Bot::keep(Snowflake thread, Snowflake message, int index, Report::Attachmen
     }
 }
 
+std::string Bot::update(Snowflake channel, Snowflake requester, std::optional<Snowflake> replyTo)
+{
+    auto existing = m_state.posts.find(channel);
+    if (existing == m_state.posts.end())
+        return "This post is not filed.";
+    PostRecord& record = existing->second;
+    const Report::Limits limits{m_config.textLimit, 60000};
+    Snowflake newest = record.lastMessage;
+    const auto messages = collect(channel, record.lastMessage, &newest);
+    if (!messages) {
+        if (replyTo)
+            reply(channel, *replyTo, "Discord did not give me the post's messages. Try again in a minute.");
+        return "Discord did not give the post's messages.";
+    }
+    if (messages->empty()) {
+        if (replyTo)
+            tell(channel, replyTo, std::format("{}#{}", record.repo, record.number), record.url,
+                 "Nothing is new in this post since the issue was last updated.", Brand::Slate);
+        record.lastMessage = newest;
+        save();
+        return "Nothing is new in the post.";
+    }
+    Report::Participants participants = record.participants;
+    const std::string body = Report::updateComment(record.discordUrl, *messages, participants, requester, limits);
+    const auto url = m_github.comment(record.repo, record.number, body);
+    if (!url) {
+        if (replyTo)
+            reply(channel, *replyTo, "GitHub did not take the update. A maintainer can find why in my log.");
+        return "GitHub did not take the update.";
+    }
+    record.participants = participants;
+    record.lastMessage = newest;
+    record.updatedAt = now();
+    keepFiles(record, *messages);
+    const std::string added =
+        std::format("{} new message{} added to the issue.", messages->size(), messages->size() == 1 ? "" : "s");
+    tell(channel, replyTo, std::format("Updated {}#{}", record.repo, record.number), *url, added, Brand::Cyan);
+    save();
+    return added;
+}
+
+void Bot::keepFiles(PostRecord& record, const std::vector<Report::Message>& messages)
+{
+    for (const auto& message : messages) {
+        for (const auto& attachment : message.attachments) {
+            if (!attachment.publicUrl.empty())
+                record.files.push_back({attachment.name, attachment.kind, attachment.size, attachment.publicUrl,
+                                        attachment.keptPath, false});
+        }
+    }
+}
+
 void Bot::file(const Json& message, const Json& thread, const std::string& words)
 {
     const Snowflake channel = idOf(thread, "id");
@@ -378,35 +459,8 @@ void Bot::file(const Json& message, const Json& thread, const std::string& words
     const std::string postUrl = std::format("https://discord.com/channels/{}/{}", guild, channel);
     const Report::Limits limits{m_config.textLimit, 60000};
 
-    auto existing = m_state.posts.find(channel);
-    if (existing != m_state.posts.end()) {
-        PostRecord& record = existing->second;
-        Snowflake newest = record.lastMessage;
-        const auto messages = collect(channel, record.lastMessage, &newest);
-        if (!messages) {
-            reply(channel, trigger, "Discord did not give me the post's messages. Try again in a minute.");
-            return;
-        }
-        if (messages->empty()) {
-            tell(channel, trigger, std::format("{}#{}", record.repo, record.number), record.url,
-                 "Nothing is new in this post since the issue was last updated.", Brand::Slate);
-            record.lastMessage = newest;
-            save();
-            return;
-        }
-        Report::Participants participants = record.participants;
-        const std::string body = Report::updateComment(postUrl, *messages, participants, requester, limits);
-        const auto url = m_github.comment(record.repo, record.number, body);
-        if (!url) {
-            reply(channel, trigger, "GitHub did not take the update. A maintainer can find why in my log.");
-            return;
-        }
-        record.participants = participants;
-        record.lastMessage = newest;
-        tell(channel, trigger, std::format("Updated {}#{}", record.repo, record.number), *url,
-             std::format("{} new message{} added to the issue.", messages->size(), messages->size() == 1 ? "" : "s"),
-             Brand::Cyan);
-        save();
+    if (m_state.posts.contains(channel)) {
+        update(channel, requester, trigger);
         return;
     }
 
@@ -451,7 +505,9 @@ void Bot::file(const Json& message, const Json& thread, const std::string& words
         reply(channel, trigger, "GitHub did not take the issue. A maintainer can find why in my log.");
         return;
     }
-    m_state.posts[channel] = {*repo, issue->number, issue->url, newest, participants, "open"};
+    PostRecord& record = m_state.posts[channel];
+    record = {*repo, issue->number, issue->url, newest, participants, "open", title, now(), now(), postUrl, {}};
+    keepFiles(record, *messages);
     tell(channel, trigger, std::format("Filed as {}#{}", *repo, issue->number), issue->url,
          "Mention me again to add what is new in this post. I will say here when the issue closes.", Brand::Cyan);
     Log::info("glim", "filed post {} as {}#{}", channel, *repo, issue->number);
@@ -541,6 +597,174 @@ void Bot::save()
 {
     if (!m_config.statePath.empty())
         saveState(m_config.statePath, m_state);
+    publish();
+}
+
+std::int64_t Bot::now() const
+{
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+namespace {
+
+Json publicPost(Snowflake id, const PostRecord& post)
+{
+    return {{"id", std::to_string(id)},   {"repo", post.repo},
+            {"number", post.number},      {"url", post.url},
+            {"title", post.title},        {"state", post.issueState},
+            {"filed", post.filedAt},      {"updated", post.updatedAt},
+            {"discord", post.discordUrl}, {"files", filesJson(post.files, true)}};
+}
+
+} // namespace
+
+void Bot::publish()
+{
+    if (m_config.filesDir.empty())
+        return;
+    // What the page shows names no one: the issue's own title, its state,
+    // its dates, the kept files. The posts' ids are in the files' addresses
+    // already.
+    const std::string api = m_config.filesDir + "/api";
+    std::error_code error;
+    std::filesystem::create_directories(api + "/p", error);
+    std::filesystem::permissions(api, std::filesystem::perms(0755), error);
+    std::filesystem::permissions(api + "/p", std::filesystem::perms(0755), error);
+    Json posts = Json::array();
+    std::set<std::string> current;
+    for (const auto& [id, post] : m_state.posts) {
+        Json entry = publicPost(id, post);
+        writeFileAtomically(std::format("{}/p/{}.json", api, id), entry.dump() + "\n", "files", 0644);
+        current.insert(std::format("{}.json", id));
+        entry["files"] = std::count_if(post.files.begin(), post.files.end(), [](const KeptFile& file) {
+            return !file.removed;
+        });
+        posts.push_back(std::move(entry));
+    }
+    std::sort(posts.begin(), posts.end(), [](const Json& a, const Json& b) {
+        return a["updated"] > b["updated"];
+    });
+    writeFileAtomically(api + "/posts.json",
+                        Json{{"org", m_config.org}, {"generated", now()}, {"posts", posts}}.dump() + "\n", "files",
+                        0644);
+    for (const auto& entry : std::filesystem::directory_iterator(api + "/p", error)) {
+        if (!current.contains(entry.path().filename().string()))
+            std::filesystem::remove(entry.path(), error); // an unlinked post
+    }
+}
+
+ServerResponse Bot::onBotThread(std::function<ServerResponse()> job)
+{
+    if (!m_running)
+        return job();
+    auto task = std::make_shared<std::packaged_task<ServerResponse()>>(std::move(job));
+    auto result = task->get_future();
+    {
+        const std::lock_guard lock(m_mutex);
+        if (m_stop)
+            return {503, "application/json", R"({"error":"Glim is stopping"})"};
+        m_jobs.push_back([task] {
+            (*task)();
+        });
+    }
+    m_wake.notify_one();
+    if (result.wait_for(std::chrono::minutes(3)) != std::future_status::ready)
+        return {503, "application/json", R"({"error":"Glim is busy; try again"})"};
+    return result.get();
+}
+
+ServerResponse Bot::staffRequest(const ServerRequest& request)
+{
+    const auto error = [](int status, const std::string& message) {
+        return ServerResponse{status, "application/json", Json{{"error", message}}.dump()};
+    };
+    if (!request.path.starts_with("/staff/api/"))
+        return error(404, "no such page");
+    // Cloudflare Access signs each request it lets through; one without its
+    // token came some other way.
+    const auto token = request.headers.find("cf-access-jwt-assertion");
+    std::string why;
+    const auto email =
+        m_verify && token != request.headers.end() ? m_verify(token->second, &why) : std::optional<std::string>();
+    if (!email) {
+        Log::info("staff", "refused {} {}: {}", request.method, request.path,
+                  token == request.headers.end() ? "no Access token" : why);
+        return error(403, "Sign in through Cloudflare Access.");
+    }
+    if (!m_config.staffEmails.empty() && !m_config.staffEmails.contains(lower(*email)))
+        return error(403, "This account is not on Glim's staff list.");
+    // A form of another site cannot set this header: no request of a
+    // signed-in browser is made for them.
+    if (request.method == "POST" && !request.headers.contains("x-glim-staff"))
+        return error(400, "the X-Glim-Staff header is missing");
+    return onBotThread([this, request, email = *email] {
+        return staffAction(request, email);
+    });
+}
+
+ServerResponse Bot::staffAction(const ServerRequest& request, const std::string& email)
+{
+    const auto answer = [](int status, const Json& body) {
+        return ServerResponse{status, "application/json", body.dump()};
+    };
+    std::vector<std::string> parts;
+    for (std::size_t at = std::string("/staff/api/").size(); at <= request.path.size();) {
+        const auto slash = request.path.find('/', at);
+        parts.push_back(request.path.substr(at, slash == std::string::npos ? std::string::npos : slash - at));
+        if (slash == std::string::npos)
+            break;
+        at = slash + 1;
+    }
+    if (request.method == "GET" && parts == std::vector<std::string>{"me"})
+        return answer(200, {{"email", email}});
+    if (request.method == "GET" && parts == std::vector<std::string>{"posts"}) {
+        Json posts = Json::array();
+        for (const auto& [id, post] : m_state.posts) {
+            Json entry = publicPost(id, post);
+            entry["files"] = filesJson(post.files);
+            posts.push_back(std::move(entry));
+        }
+        return answer(200, {{"posts", posts}});
+    }
+    if (request.method != "POST" || parts.size() < 3 || parts[0] != "posts")
+        return answer(404, {{"error", "no such action"}});
+    const Snowflake id = parseSnowflake(parts[1]).value_or(0);
+    const auto post = m_state.posts.find(id);
+    if (post == m_state.posts.end())
+        return answer(404, {{"error", "no such post"}});
+    const std::string name = std::format("{}#{}", post->second.repo, post->second.number);
+
+    if (parts.size() == 3 && parts[2] == "update") {
+        const std::string result = update(id, 0, std::nullopt);
+        Log::info("staff", "{} updated {} ({}): {}", email, id, name, result);
+        return answer(200, {{"result", result}});
+    }
+    if (parts.size() == 5 && parts[2] == "files" && parts[4] == "remove") {
+        auto& files = post->second.files;
+        const auto index = parseSnowflake(parts[3]); // 1-based
+        if (!index || *index > files.size() || files[*index - 1].removed)
+            return answer(404, {{"error", "no such file"}});
+        KeptFile& file = files[*index - 1];
+        std::error_code error;
+        std::filesystem::remove(m_config.filesDir + "/" + file.path, error);
+        file.removed = true;
+        Log::info("staff", "{} took down {} of {} ({})", email, file.path, id, name);
+        save();
+        return answer(200, {{"result", std::format("{} is taken down.", file.name)}});
+    }
+    if (parts.size() == 3 && parts[2] == "unlink") {
+        const bool removeFiles = request.query.find("files=remove") != std::string::npos;
+        if (removeFiles) {
+            std::error_code error;
+            std::filesystem::remove_all(std::format("{}/{}", m_config.filesDir, id), error);
+        }
+        m_state.posts.erase(post);
+        Log::info("staff", "{} unlinked {} from {}{}", email, id, name, removeFiles ? ", its files taken down" : "");
+        save();
+        return answer(200, {{"result", std::format("The post is no longer linked to {}.", name)}});
+    }
+    return answer(404, {{"error", "no such action"}});
 }
 
 } // namespace Glim

@@ -16,9 +16,10 @@ namespace Glim {
 namespace {
 
 const std::set<std::string, std::less<>> KnownKeys = {
-    "GLIM_TOKEN",      "GLIM_APP_ID",      "GLIM_APP_KEY",    "GLIM_ORG",      "GLIM_FORUMS",   "GLIM_TAG_REPOS",
-    "GLIM_ALIASES",    "GLIM_STAFF_ROLES", "GLIM_SOLVED_TAG", "GLIM_LABELS",   "GLIM_STATE",    "GLIM_POLL_SECONDS",
-    "GLIM_TEXT_LIMIT", "GLIM_FILES_DIR",   "GLIM_FILES_URL",  "GLIM_FILE_MIB", "GLIM_POST_MIB",
+    "GLIM_TOKEN",       "GLIM_APP_ID",      "GLIM_APP_KEY",      "GLIM_ORG",      "GLIM_FORUMS",   "GLIM_TAG_REPOS",
+    "GLIM_ALIASES",     "GLIM_STAFF_ROLES", "GLIM_SOLVED_TAG",   "GLIM_LABELS",   "GLIM_STATE",    "GLIM_POLL_SECONDS",
+    "GLIM_TEXT_LIMIT",  "GLIM_FILES_DIR",   "GLIM_FILES_URL",    "GLIM_FILE_MIB", "GLIM_POST_MIB", "GLIM_STAFF_LISTEN",
+    "GLIM_ACCESS_TEAM", "GLIM_ACCESS_AUD",  "GLIM_STAFF_EMAILS",
 };
 
 [[noreturn]] void fail(std::string_view key, std::string_view why)
@@ -156,6 +157,21 @@ Config parseConfig(const std::map<std::string, std::string>& env)
         config.fileLimit = std::size_t(number("GLIM_FILE_MIB", value, 1, 500)) << 20;
     if (const auto value = get("GLIM_POST_MIB"); !value.empty())
         config.postLimit = std::size_t(number("GLIM_POST_MIB", value, 1, 2000)) << 20;
+    config.staffListen = get("GLIM_STAFF_LISTEN");
+    config.accessTeam = get("GLIM_ACCESS_TEAM");
+    config.accessAud = get("GLIM_ACCESS_AUD");
+    for (const auto& email : words(get("GLIM_STAFF_EMAILS")))
+        config.staffEmails.insert(lower(email));
+    if (!config.staffListen.empty()) {
+        if (config.staffListen.find(':') == std::string::npos)
+            fail("GLIM_STAFF_LISTEN", "an address and a port: 10.17.0.7:8090");
+        if (config.accessTeam.empty() || !name(config.accessTeam))
+            fail("GLIM_ACCESS_TEAM", "needed by GLIM_STAFF_LISTEN: the Zero Trust team's name");
+        if (config.accessAud.empty())
+            fail("GLIM_ACCESS_AUD", "needed by GLIM_STAFF_LISTEN: the Access application's AUD tag");
+        if (config.filesDir.empty())
+            fail("GLIM_FILES_DIR", "needed by GLIM_STAFF_LISTEN: the issues page reads it");
+    }
     return config;
 }
 

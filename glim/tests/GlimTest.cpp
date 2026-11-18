@@ -364,3 +364,160 @@ TEST(Glim, AttachmentsAreKeptWithoutTheirMetadata)
     EXPECT_EQ(std::distance(std::filesystem::directory_iterator(dir / std::to_string(Post)), {}), 2);
     std::filesystem::remove_all(dir);
 }
+
+namespace {
+
+ServerRequest staff(const std::string& method, const std::string& path, const std::string& token = "good",
+                    bool header = true)
+{
+    ServerRequest request;
+    request.method = method;
+    const auto question = path.find('?');
+    request.path = path.substr(0, question);
+    request.query = question == std::string::npos ? std::string() : path.substr(question + 1);
+    if (!token.empty())
+        request.headers["cf-access-jwt-assertion"] = token;
+    if (header)
+        request.headers["x-glim-staff"] = "1";
+    return request;
+}
+
+Json readJson(const std::filesystem::path& path)
+{
+    std::ifstream file(path);
+    return Json::parse(file, nullptr, false);
+}
+
+struct StaffWorld : World
+{
+    std::filesystem::path dir;
+    explicit StaffWorld(std::filesystem::path d)
+        : World(d.string())
+        , dir(std::move(d))
+    {
+        bot->setVerifier([](const std::string& token, std::string* why) -> std::optional<std::string> {
+            if (token == "good")
+                return "staff@example.org";
+            *why = "a bad signature";
+            return std::nullopt;
+        });
+    }
+    ~StaffWorld()
+    {
+        std::filesystem::remove_all(dir);
+    }
+
+    void fileWithScreenshot()
+    {
+        Json m = message(Owner, "screenshot");
+        m["attachments"] = Json::array({{{"filename", "shot.png"},
+                                         {"content_type", "image/png"},
+                                         {"size", 68},
+                                         {"url", "https://cdn.discordapp.com/attachments/shot.png"}}});
+        messages.push_back(m);
+        say(Owner, "<@999>");
+    }
+};
+
+std::filesystem::path scratch(const char* name)
+{
+    return std::filesystem::temp_directory_path() / std::format("glim-{}-{}", name, ::getpid());
+}
+
+} // namespace
+
+TEST(GlimStaff, ThePageDataNamesNoOne)
+{
+    StaffWorld w(scratch("publish"));
+    w.fileWithScreenshot();
+    const Json posts = readJson(w.dir / "api/posts.json");
+    ASSERT_EQ(posts["posts"].size(), 1u);
+    const Json& post = posts["posts"][0];
+    EXPECT_EQ(post["id"], std::to_string(Post));
+    EXPECT_EQ(post["repo"], "PlasmaZones");
+    EXPECT_EQ(post["number"], 145);
+    EXPECT_EQ(post["title"], "Zones jump between screens");
+    EXPECT_EQ(post["files"], 1);
+    const std::string text = posts.dump() + readJson(w.dir / std::format("api/p/{}.json", Post)).dump();
+    EXPECT_EQ(text.find(std::to_string(Owner)), std::string::npos) << "no Discord user's id";
+    EXPECT_EQ(text.find("path"), std::string::npos) << "no file paths of the server";
+    EXPECT_EQ(readJson(w.dir / std::format("api/p/{}.json", Post))["files"][0]["kind"], "image");
+}
+
+TEST(GlimStaff, OnlyAccessesPeopleGetIn)
+{
+    StaffWorld w(scratch("auth"));
+    EXPECT_EQ(w.bot->staffRequest(staff("GET", "/staff/api/me", "")).status, 403) << "no token";
+    EXPECT_EQ(w.bot->staffRequest(staff("GET", "/staff/api/me", "forged")).status, 403);
+    const auto me = w.bot->staffRequest(staff("GET", "/staff/api/me"));
+    EXPECT_EQ(me.status, 200);
+    EXPECT_EQ(Json::parse(me.body)["email"], "staff@example.org");
+    EXPECT_EQ(w.bot->staffRequest(staff("POST", "/staff/api/posts/1/update", "good", false)).status, 400)
+        << "no X-Glim-Staff: maybe another site's form";
+    EXPECT_EQ(w.bot->staffRequest(staff("POST", "/staff/api/posts/1/update")).status, 404) << "no such post";
+}
+
+TEST(GlimStaff, TheStaffListLimitsWhoActs)
+{
+    const auto dir = scratch("list");
+    World w(dir.string());
+    w.config.staffEmails = {"boss@example.org"};
+    w.bot = std::make_unique<Bot>(
+        w.config,
+        [&w](const HttpRequest& r) {
+            return w.discord(r);
+        },
+        [&w](const HttpRequest& r) {
+            return w.github(r);
+        },
+        [] {
+            return std::string("installation-token");
+        });
+    w.bot->setVerifier([](const std::string&, std::string*) {
+        return std::optional<std::string>("Staff@Example.org");
+    });
+    EXPECT_EQ(w.bot->staffRequest(staff("GET", "/staff/api/me")).status, 403);
+    std::filesystem::remove_all(dir);
+}
+
+TEST(GlimStaff, AFileIsTakenDown)
+{
+    StaffWorld w(scratch("remove"));
+    w.fileWithScreenshot();
+    const auto& file = w.bot->state().posts.at(Post).files.at(0);
+    const auto path = w.dir / file.path;
+    ASSERT_TRUE(std::filesystem::exists(path));
+    const auto answer = w.bot->staffRequest(staff("POST", std::format("/staff/api/posts/{}/files/1/remove", Post)));
+    EXPECT_EQ(answer.status, 200) << answer.body;
+    EXPECT_FALSE(std::filesystem::exists(path));
+    EXPECT_TRUE(w.bot->state().posts.at(Post).files.at(0).removed);
+    EXPECT_TRUE(readJson(w.dir / std::format("api/p/{}.json", Post))["files"].empty());
+    EXPECT_EQ(w.bot->staffRequest(staff("POST", std::format("/staff/api/posts/{}/files/1/remove", Post))).status, 404)
+        << "once";
+}
+
+TEST(GlimStaff, AnUpdateFromThePage)
+{
+    StaffWorld w(scratch("update"));
+    w.fileWithScreenshot();
+    w.messages.push_back(w.message(Stranger, "More details"));
+    const auto answer = w.bot->staffRequest(staff("POST", std::format("/staff/api/posts/{}/update", Post)));
+    EXPECT_EQ(answer.status, 200);
+    ASSERT_EQ(w.comments.size(), 1u);
+    EXPECT_NE(std::string(w.comments[0]["body"]).find("at the request of staff, on the issues page"),
+              std::string::npos);
+    EXPECT_NE(w.lastReply().find("Updated PlasmaZones#145"), std::string::npos) << "the post is told";
+}
+
+TEST(GlimStaff, AnUnlinkedPostLeavesThePage)
+{
+    StaffWorld w(scratch("unlink"));
+    w.fileWithScreenshot();
+    const auto answer =
+        w.bot->staffRequest(staff("POST", std::format("/staff/api/posts/{}/unlink?files=remove", Post)));
+    EXPECT_EQ(answer.status, 200);
+    EXPECT_TRUE(w.bot->state().posts.empty());
+    EXPECT_FALSE(std::filesystem::exists(w.dir / std::to_string(Post)));
+    EXPECT_FALSE(std::filesystem::exists(w.dir / std::format("api/p/{}.json", Post)));
+    EXPECT_TRUE(readJson(w.dir / "api/posts.json")["posts"].empty());
+}
