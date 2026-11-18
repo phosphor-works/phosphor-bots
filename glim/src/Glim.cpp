@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <future>
 #include <format>
@@ -55,6 +57,19 @@ std::string trim(std::string_view text)
     while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
         text.remove_suffix(1);
     return std::string(text);
+}
+
+/// "2026-11-18T21:00:00Z" as Unix seconds; 0 when it is not that form.
+std::int64_t isoSeconds(const std::string& text)
+{
+    std::tm tm{};
+    if (std::sscanf(text.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday, &tm.tm_hour,
+                    &tm.tm_min, &tm.tm_sec)
+        != 6)
+        return 0;
+    tm.tm_year -= 1900;
+    tm.tm_mon -= 1;
+    return std::int64_t(timegm(&tm));
 }
 
 std::string firstWord(std::string_view text)
@@ -524,6 +539,18 @@ void Bot::round()
             if (deleted)
                 gone.push_back(thread);
             continue;
+        }
+        // Posts filed before Glim kept these: their issue and post say them.
+        if (record.title.empty() && !item->title.empty()) {
+            record.title = item->title;
+            record.filedAt = isoSeconds(item->createdAt);
+            record.updatedAt = std::max(record.updatedAt, record.filedAt);
+        }
+        if (record.discordUrl.empty()) {
+            const DiscordResult post = m_discord.call("GET", std::format("/channels/{}", thread));
+            if (post.ok())
+                record.discordUrl =
+                    std::format("https://discord.com/channels/{}/{}", idOf(post.body, "guild_id"), thread);
         }
         if (item->state == record.issueState)
             continue;

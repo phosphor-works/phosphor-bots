@@ -134,7 +134,9 @@ struct World
             return json({{"number", 145},
                          {"state", issueState},
                          {"state_reason", stateReason},
-                         {"html_url", "https://github.com/i/145"}});
+                         {"html_url", "https://github.com/i/145"},
+                         {"title", "Zones jump between screens"},
+                         {"created_at", "2026-11-18T12:00:00Z"}});
         return {404, {}, "{}", {}};
     }
 
@@ -520,4 +522,35 @@ TEST(GlimStaff, AnUnlinkedPostLeavesThePage)
     EXPECT_FALSE(std::filesystem::exists(w.dir / std::to_string(Post)));
     EXPECT_FALSE(std::filesystem::exists(w.dir / std::format("api/p/{}.json", Post)));
     EXPECT_TRUE(readJson(w.dir / "api/posts.json")["posts"].empty());
+}
+
+TEST(GlimStaff, AnOlderRecordGetsItsTitleAndLink)
+{
+    StaffWorld w(scratch("backfill"));
+    w.fileWithScreenshot();
+    // A record of an older Glim: no title, no dates, no link to the post.
+    State older = w.bot->state();
+    auto& record = older.posts.at(Post);
+    record.title.clear();
+    record.filedAt = record.updatedAt = 0;
+    record.discordUrl.clear();
+    const auto path = w.dir / "state.json";
+    ASSERT_TRUE(saveState(path.string(), older));
+    w.config.statePath = path.string();
+    w.bot = std::make_unique<Bot>(
+        w.config,
+        [&w](const HttpRequest& r) {
+            return w.discord(r);
+        },
+        [&w](const HttpRequest& r) {
+            return w.github(r);
+        },
+        [] {
+            return std::string("installation-token");
+        });
+    w.bot->round();
+    const auto& filled = w.bot->state().posts.at(Post);
+    EXPECT_EQ(filled.title, "Zones jump between screens");
+    EXPECT_EQ(filled.filedAt, 1'795'003'200);
+    EXPECT_EQ(filled.discordUrl, std::format("https://discord.com/channels/1/{}", Post));
 }
