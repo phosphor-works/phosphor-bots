@@ -74,7 +74,8 @@ that Glim does not know stops it, and the log names the key.
 
 In the organization's settings, under Developer settings, GitHub Apps, select New GitHub App:
 
-1. Name: Glim. Homepage URL: `https://github.com/phosphor-works/phosphor-bots`.
+1. Name: Phosphor Glim. App names are unique across GitHub, and "Glim" is taken. Its issues show as
+   `phosphor-glim[bot]`. Homepage URL: `https://github.com/phosphor-works/phosphor-bots`.
 2. Logo: render `svg/mascot/avatar/glim.svg` of branding to a PNG.
 3. Webhook: clear **Active**. Glim asks GitHub; GitHub never calls Glim.
 4. Repository permissions: **Issues: Read and write**. Metadata becomes read-only by itself. Give no other
