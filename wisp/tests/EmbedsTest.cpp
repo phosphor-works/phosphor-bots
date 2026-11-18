@@ -35,22 +35,30 @@ Item pull()
 
 } // namespace
 
-TEST(Embeds, StatesInTheBrandColours)
+TEST(Embeds, EachKindHasItsColour)
 {
     Item item = pull();
-    EXPECT_EQ(itemColor(item), Brand::Cyan);
+    EXPECT_EQ(itemColor(item), KindColor::PullRequest);
+    item.pull = false;
+    EXPECT_EQ(itemColor(item), KindColor::Issue);
+    EXPECT_NE(KindColor::PullRequest, KindColor::Issue);
+    EXPECT_NE(KindColor::Push, KindColor::Release);
+}
+
+TEST(Embeds, DraftsAndFinishedItemsAreMuted)
+{
+    Item item = pull();
     item.draft = true;
-    EXPECT_EQ(itemColor(item), Brand::Slate);
+    EXPECT_EQ(itemColor(item), KindColor::Finished);
+    item.draft = false;
     item.state = "closed";
     item.merged = true;
-    EXPECT_EQ(itemColor(item), Brand::Purple);
-    item.merged = false;
-    EXPECT_EQ(itemColor(item), Brand::Rose);
+    EXPECT_EQ(itemColor(item), KindColor::Finished);
+    EXPECT_EQ(itemState(item), "merged pull request");
     item.pull = false;
-    item.stateReason = "completed";
-    EXPECT_EQ(itemColor(item), Brand::Purple);
+    item.merged = false;
     item.stateReason = "not_planned";
-    EXPECT_EQ(itemColor(item), Brand::Slate);
+    EXPECT_EQ(itemColor(item), KindColor::Finished);
     EXPECT_EQ(itemState(item), "closed (not planned) issue");
 }
 
@@ -63,7 +71,7 @@ TEST(Embeds, ACardCarriesTheBrand)
     const auto card = itemCard(look, pull(), extras);
     const auto& embed = card["embeds"][0];
     EXPECT_EQ(embed["title"], "#87 · Port aglow to FreeBSD");
-    EXPECT_EQ(embed["color"], Brand::Cyan);
+    EXPECT_EQ(embed["color"], KindColor::PullRequest);
     EXPECT_EQ(embed["author"]["name"], "phosphor-works / Afterglow");
     EXPECT_EQ(embed["author"]["icon_url"], "https://example.org/org.png");
     EXPECT_EQ(embed["footer"]["text"], "Wisp · phosphor-works");
@@ -106,7 +114,7 @@ TEST(Embeds, APushCard)
     push.runs = {{1, "Arch", "completed", "failure", "https://ci", "", ""}};
     const auto embed = pushCard(look, push)["embeds"][0];
     EXPECT_EQ(embed["title"], "2 commits to main");
-    EXPECT_EQ(embed["color"], Brand::Rose);
+    EXPECT_EQ(embed["color"], KindColor::Push) << "a failed run shows in its icon";
     EXPECT_EQ(embed["url"], "https://github.com/phosphor-works/Afterglow/compare/111111111111...222222222222");
     const std::string description = embed["description"];
     EXPECT_LT(description.find("Second"), description.find("First")) << "newest first";
@@ -121,7 +129,7 @@ TEST(Embeds, AReleaseCard)
     release.assets = {{"afterglow.tar.gz", 3 * 1024 * 1024, "https://a"}};
     const auto embed = releaseCard(look, "Afterglow", release)["embeds"][0];
     EXPECT_EQ(embed["title"], "Afterglow v0.1.0");
-    EXPECT_EQ(embed["color"], Brand::Blue);
+    EXPECT_EQ(embed["color"], KindColor::Release);
     EXPECT_NE(std::string(embed["description"]).find("afterglow.tar.gz](https://a) (3.0 MiB)"), std::string::npos);
 }
 

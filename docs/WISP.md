@@ -38,15 +38,17 @@ the followed repositories. Each round (`WISP_POLL_SECONDS`) draws the cards agai
 A pull request's card shows its branches, commits and size, its labels, the result of each workflow on its head
 commit, and the latest comment of a person.
 
-The colours come from the Phosphor palette:
+Each kind of message has its colour of the Phosphor palette:
 
-| Colour | State |
+| Colour | Kind |
 | --- | --- |
-| Cyan `#22D3EE` | open, or CI passed |
-| Purple `#A855F7` | merged, or completed |
-| Rose `#F43F5E` | closed without a merge, or CI failed |
-| Blue `#3B82F6` | a release, or CI still running |
-| Slate `#94A3B8` | draft, or not planned |
+| Blue `#3B82F6` | a pull request |
+| Cyan `#22D3EE` | an issue |
+| Purple `#A855F7` | a push (the feed) |
+| Rose `#F43F5E` | a release (the feed) |
+| Slate `#94A3B8` | a draft, or an item closed or merged |
+
+The text says an item's state, and an icon says each CI run's result: ✅ passed, ❌ failed, ⏳ running.
 
 Each card shows the organization's avatar and the repository above its title, and Wisp's avatar in its footer. Wisp
 uses its own Discord avatar there, unless `WISP_ICON_URL` gives another.

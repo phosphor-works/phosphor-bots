@@ -18,12 +18,23 @@ namespace Wisp::Embeds {
 /// The Phosphor palette (phosphor-works/branding, palette/phosphor.toml): the
 /// logo's cyan, blue, purple and rose, and the slate of its muted text.
 namespace Brand {
-inline constexpr int Cyan = 0x22D3EE; ///< open, live, passing
-inline constexpr int Blue = 0x3B82F6; ///< the primary: releases, work in progress
-inline constexpr int Purple = 0xA855F7; ///< merged, completed
-inline constexpr int Rose = 0xF43F5E; ///< closed unmerged, failing
-inline constexpr int Slate = 0x94A3B8; ///< drafts, not planned, nothing to say
+inline constexpr int Cyan = 0x22D3EE;
+inline constexpr int Blue = 0x3B82F6;
+inline constexpr int Purple = 0xA855F7;
+inline constexpr int Rose = 0xF43F5E;
+inline constexpr int Slate = 0x94A3B8;
 } // namespace Brand
+
+/// Each kind of message has its colour of the palette, so that a channel
+/// tells them apart at a glance; the text and the CI icons say the state.
+namespace KindColor {
+inline constexpr int PullRequest = Brand::Blue;
+inline constexpr int Issue = Brand::Cyan;
+inline constexpr int Push = Brand::Purple;
+inline constexpr int Release = Brand::Rose;
+/// A draft, and an item closed or merged: nothing more to do there.
+inline constexpr int Finished = Brand::Slate;
+} // namespace KindColor
 
 /// What every message carries: the organization it speaks for, with its
 /// avatar (the Phosphor mark) above the title, and Wisp's avatar beside its
@@ -60,7 +71,8 @@ nlohmann::json itemCard(const Look& look, const Item& item, const CardExtras& ex
 nlohmann::json pushCard(const Look& look, const Push& push);
 nlohmann::json releaseCard(const Look& look, const std::string& repo, const Release& release);
 
-/// The brand colour of an item's state: open, draft, merged, closed...
+/// The colour of an item: its kind's while it is open, Finished once it is a
+/// draft, closed or merged.
 int itemColor(const Item& item);
 /// The words for an item's state: "open pull request", "merged pull request"...
 std::string itemState(const Item& item);

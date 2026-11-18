@@ -228,7 +228,7 @@ TEST(Cards, AClosedCardStaysADayThenGoes)
     const auto& card = w.state.cards["pr:Afterglow#1"];
     EXPECT_EQ(card.closedAt, w.now);
     const auto message = w.messages.at(card.message).second;
-    EXPECT_EQ(message["embeds"][0]["color"], Embeds::Brand::Purple) << "merged";
+    EXPECT_EQ(message["embeds"][0]["color"], Embeds::KindColor::Finished) << "merged";
 
     w.now += 23 * 3600;
     w.cards.round();

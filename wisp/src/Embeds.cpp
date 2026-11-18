@@ -139,10 +139,8 @@ std::string shorten(std::string_view text, std::size_t limit)
 int itemColor(const Item& item)
 {
     if (item.state == "open")
-        return item.draft ? Slate : Cyan;
-    if (item.pull)
-        return item.merged ? Purple : Rose;
-    return item.stateReason == "not_planned" ? Slate : Purple;
+        return item.draft ? KindColor::Finished : item.pull ? KindColor::PullRequest : KindColor::Issue;
+    return KindColor::Finished;
 }
 
 std::string itemState(const Item& item)
@@ -242,14 +240,12 @@ Json pushCard(const Look& look, const Push& push)
         description += "\n" + runsLine(push.runs);
 
     const int count = std::max(push.total, 1);
-    const std::string result = runsResult(push.runs);
-    const int color = result == "failure" ? Rose : result == "pending" ? Blue : result == "success" ? Cyan : Slate;
     const std::string url = push.before.empty()
         ? push.head.url
         : std::format("https://github.com/{}/{}/compare/{}...{}", look.org, push.repo, push.before.substr(0, 12),
                       push.head.sha.substr(0, 12));
     Json e = embed(look, push.repo, std::format("{} commit{} to {}", count, count == 1 ? "" : "s", push.branch), url,
-                   color, description);
+                   KindColor::Push, description);
     return {{"content", ""}, {"embeds", Json::array({e})}};
 }
 
@@ -269,8 +265,7 @@ Json releaseCard(const Look& look, const std::string& repo, const Release& relea
         description += std::format("[{}]({}) ({})\n", escape(asset.name), asset.url, size(asset.size));
     }
     const std::string title = release.name.empty() ? release.tag : release.name;
-    Json e = embed(look, repo, std::format("{} {}", repo, title), release.url, release.prerelease ? Purple : Blue,
-                   description);
+    Json e = embed(look, repo, std::format("{} {}", repo, title), release.url, KindColor::Release, description);
     if (!release.publishedAt.empty())
         e["timestamp"] = release.publishedAt;
     return {{"content", ""}, {"embeds", Json::array({e})}};
