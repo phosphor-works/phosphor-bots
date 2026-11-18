@@ -92,7 +92,11 @@ To get a channel id, turn on Developer Mode in Discord. Then right-click the cha
 In the Discord Developer Portal:
 
 1. Make an application named Wisp.
-2. Set its avatar to the Wisp mascot: render `svg/mascot/avatar/wisp.svg` of branding to a PNG of 1024 × 1024.
+2. Set its avatar to the Wisp mascot. Discord takes a PNG, so render `svg/mascot/avatar/wisp.svg` of branding
+   (librsvg):
+
+       rsvg-convert --width 1024 --height 1024 --keep-aspect-ratio --output wisp-avatar.png svg/mascot/avatar/wisp.svg
+
 3. Under Bot, reset the token and put it in the env file.
 4. Under Bot, turn on **Message Content Intent**. Without it, Discord stops the bot with close code 4014.
 5. Turn off **Public Bot**.
