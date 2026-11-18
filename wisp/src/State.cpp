@@ -3,14 +3,7 @@
 
 #include "State.h"
 
-#include <cerrno>
-#include <cstdio>
-#include <cstring>
-#include <fstream>
-#include <sstream>
-
-#include <fcntl.h>
-#include <unistd.h>
+#include "Files.h"
 
 namespace Wisp {
 
@@ -121,15 +114,14 @@ State stateFromJson(const Json& json)
 
 std::optional<State> loadState(const std::string& path)
 {
-    std::ifstream file(path);
-    if (!file) {
-        if (errno != ENOENT)
-            Log::info("state", "{}: {}; starting with nothing kept", path, std::strerror(errno));
+    std::string error;
+    const auto text = readFile(path, &error);
+    if (!text) {
+        if (!error.empty())
+            Log::info("state", "{}: {}; starting with nothing kept", path, error);
         return std::nullopt;
     }
-    std::stringstream text;
-    text << file.rdbuf();
-    const Json json = Json::parse(text.str(), nullptr, false);
+    const Json json = Json::parse(*text, nullptr, false);
     if (!json.is_object() || json.value("format", 0) != Format) {
         Log::info("state", "{}: not a state this version reads; starting with nothing kept", path);
         return std::nullopt;
@@ -139,32 +131,7 @@ std::optional<State> loadState(const std::string& path)
 
 bool saveState(const std::string& path, const State& state)
 {
-    const std::string temporary = path + ".new";
-    const std::string text = toJson(state).dump() + "\n";
-    const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0) {
-        Log::info("state", "{}: {}", temporary, std::strerror(errno));
-        return false;
-    }
-    std::size_t written = 0;
-    while (written < text.size()) {
-        const ssize_t n = ::write(fd, text.data() + written, text.size() - written);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            Log::info("state", "{}: {}", temporary, std::strerror(errno));
-            ::close(fd);
-            ::unlink(temporary.c_str());
-            return false;
-        }
-        written += std::size_t(n);
-    }
-    if (::fsync(fd) != 0 || ::close(fd) != 0 || std::rename(temporary.c_str(), path.c_str()) != 0) {
-        Log::info("state", "{}: {}", path, std::strerror(errno));
-        ::unlink(temporary.c_str());
-        return false;
-    }
-    return true;
+    return writeFileAtomically(path, toJson(state).dump() + "\n");
 }
 
 } // namespace Wisp

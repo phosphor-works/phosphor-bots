@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "Brand.h"
 #include "Common.h"
 
 #include <optional>
@@ -14,16 +15,6 @@
 /// The messages Wisp posts, as Discord's message JSON: a pure function of
 /// what GitHub says, so that a card is edited only when its drawing changes.
 namespace Wisp::Embeds {
-
-/// The Phosphor palette (phosphor-works/branding, palette/phosphor.toml): the
-/// logo's cyan, blue, purple and rose, and the slate of its muted text.
-namespace Brand {
-inline constexpr int Cyan = 0x22D3EE;
-inline constexpr int Blue = 0x3B82F6;
-inline constexpr int Purple = 0xA855F7;
-inline constexpr int Rose = 0xF43F5E;
-inline constexpr int Slate = 0x94A3B8;
-} // namespace Brand
 
 /// Each kind of message has its colour of the palette, so that a channel
 /// tells them apart at a glance; the text and the CI icons say the state.

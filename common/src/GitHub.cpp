@@ -61,6 +61,14 @@ std::string firstLine(const std::string& message)
 } // namespace
 
 GitHub::GitHub(std::string org, std::string token, std::string userAgent, HttpTransport transport)
+    : GitHub(std::move(org), TokenSource([token = std::move(token)] {
+                 return token;
+             }),
+             std::move(userAgent), std::move(transport))
+{
+}
+
+GitHub::GitHub(std::string org, TokenSource token, std::string userAgent, HttpTransport transport)
     : m_org(std::move(org))
     , m_token(std::move(token))
     , m_userAgent(std::move(userAgent))
@@ -68,17 +76,64 @@ GitHub::GitHub(std::string org, std::string token, std::string userAgent, HttpTr
 {
 }
 
-std::optional<Json> GitHub::get(const std::string& path, long* status)
+std::vector<std::string> GitHub::headers()
 {
-    HttpRequest request;
-    request.url = std::string(Api) + path;
-    request.headers = {
+    std::vector<std::string> out = {
         "Accept: application/vnd.github+json",
         "X-GitHub-Api-Version: 2022-11-28",
         "User-Agent: " + m_userAgent,
     };
-    if (!m_token.empty())
-        request.headers.push_back("Authorization: Bearer " + m_token);
+    if (const std::string token = m_token ? m_token() : std::string(); !token.empty())
+        out.push_back("Authorization: Bearer " + token);
+    return out;
+}
+
+std::optional<Json> GitHub::send(const std::string& method, const std::string& path, const Json& body, long* status)
+{
+    HttpRequest request;
+    request.method = method;
+    request.url = std::string(Api) + path;
+    request.headers = headers();
+    request.headers.emplace_back("Content-Type: application/json");
+    request.body = body.dump(-1, ' ', false, Json::error_handler_t::replace);
+    const HttpResponse response = m_transport(request);
+    if (status)
+        *status = response.status;
+    const Json answer = Json::parse(response.body, nullptr, false);
+    if (response.status < 200 || response.status >= 300) {
+        Log::info("github", "{} {}: {}", method, path,
+                  response.status ? std::format("{} {}", response.status, text(answer, "message")) : response.error);
+        return std::nullopt;
+    }
+    return answer.is_discarded() ? Json() : answer;
+}
+
+std::optional<Item> GitHub::createIssue(const std::string& repo, const std::string& title, const std::string& body,
+                                        const std::vector<std::string>& labels)
+{
+    Json request = {{"title", title}, {"body", body}};
+    if (!labels.empty())
+        request["labels"] = labels;
+    const auto answer = send("POST", std::format("/repos/{}/{}/issues", m_org, repo), request);
+    if (!answer || !answer->is_object() || !answer->contains("number"))
+        return std::nullopt;
+    return parseItem(repo, *answer);
+}
+
+std::optional<std::string> GitHub::comment(const std::string& repo, int number, const std::string& body)
+{
+    const auto answer =
+        send("POST", std::format("/repos/{}/{}/issues/{}/comments", m_org, repo, number), Json{{"body", body}});
+    if (!answer || !answer->is_object())
+        return std::nullopt;
+    return text(*answer, "html_url");
+}
+
+std::optional<Json> GitHub::get(const std::string& path, long* status)
+{
+    HttpRequest request;
+    request.url = std::string(Api) + path;
+    request.headers = headers();
     const auto cached = m_cache.find(path);
     if (cached != m_cache.end() && !cached->second.etag.empty())
         request.headers.push_back("If-None-Match: " + cached->second.etag);

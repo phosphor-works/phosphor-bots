@@ -7,7 +7,7 @@
 #
 #   sh dist/freebsd/build.sh [OUT]      OUT: ./packages when not given
 #
-# Writes OUT/wisp-<VERSION>.pkg. Needs cmake-core, ninja, pkgconf, curl,
+# Writes OUT/wisp-<VERSION>.pkg and OUT/glim-<VERSION>.pkg. Needs cmake-core, ninja, pkgconf, curl,
 # googletest and nlohmann-json installed (pkg install cmake-core ninja pkgconf
 # curl googletest nlohmann-json). The tests run before anything is packaged.
 # A package depends on the curl and ca_root_nss this machine has.
@@ -69,3 +69,10 @@ install -s -m 755 "$work/build/wisp/wisp" "$s/libexec/wisp"
 install -m 755 "$here/wisp.rc" "$s/etc/rc.d/wisp"
 install -m 644 "$here/wisp.env.sample" "$s/etc/wisp.env.sample"
 package wisp "Wisp, phosphor-works' Discord bot" "$(deps curl ca_root_nss)"
+
+s=$work/stage/glim/usr/local
+install -d "$s/libexec" "$s/etc/rc.d"
+install -s -m 755 "$work/build/glim/glim" "$s/libexec/glim"
+install -m 755 "$here/glim.rc" "$s/etc/rc.d/glim"
+install -m 644 "$here/glim.env.sample" "$s/etc/glim.env.sample"
+package glim "Glim, files help posts of a Discord forum as GitHub issues" "$(deps curl ca_root_nss)"

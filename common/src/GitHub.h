@@ -5,6 +5,7 @@
 
 #include "Http.h"
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -121,7 +122,11 @@ struct Repository
 class GitHub
 {
 public:
+    /// Where each request's token comes from: a GitHubApp's, say. Empty: none.
+    using TokenSource = std::function<std::string()>;
+
     GitHub(std::string org, std::string token, std::string userAgent, HttpTransport transport);
+    GitHub(std::string org, TokenSource token, std::string userAgent, HttpTransport transport);
 
     const std::string& org() const
     {
@@ -131,6 +136,16 @@ public:
     /// A GET of @p path (from /repos..., /orgs...). Nothing on failure, said in
     /// the log once for each kind of failure; a 404 gives nothing quietly.
     std::optional<nlohmann::json> get(const std::string& path, long* status = nullptr);
+
+    /// A POST or PATCH of @p body to @p path; the answer when GitHub took it
+    /// (2xx), nothing otherwise (said in the log).
+    std::optional<nlohmann::json> send(const std::string& method, const std::string& path, const nlohmann::json& body,
+                                       long* status = nullptr);
+    /// A new issue in @p repo: its number and address.
+    std::optional<Item> createIssue(const std::string& repo, const std::string& title, const std::string& body,
+                                    const std::vector<std::string>& labels = {});
+    /// A comment on issue @p number: its address.
+    std::optional<std::string> comment(const std::string& repo, int number, const std::string& body);
 
     std::optional<std::vector<Repository>> repositories();
     /// The organization's avatar, as a PNG address of GitHub's.
@@ -175,7 +190,9 @@ private:
         nlohmann::json body;
     };
     std::string m_org;
-    std::string m_token;
+    std::vector<std::string> headers();
+
+    TokenSource m_token;
     std::string m_userAgent;
     HttpTransport m_transport;
     std::map<std::string, Cached> m_cache;

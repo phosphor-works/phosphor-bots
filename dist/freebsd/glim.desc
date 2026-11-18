@@ -1,0 +1,4 @@
+Glim files posts of phosphor-works' Discord help forum as GitHub issues. When
+the post's author or staff mentions it, it opens an issue with the post's
+messages, Discord names replaced, and a later mention adds what is new. When
+the issue closes, it says so in the post and tags the post solved.

@@ -18,6 +18,7 @@ include(GNUInstallDirs)
 include(cmake/BotsDependencies.cmake)
 
 find_package(CURL 7.86 REQUIRED)
+find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
 find_package(Threads REQUIRED)
 if(BUILD_TESTING)
     find_package(GTest REQUIRED)
@@ -30,3 +31,4 @@ endif()
 
 add_subdirectory(common)
 add_subdirectory(wisp)
+add_subdirectory(glim)

@@ -1,0 +1,44 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 fuddlesworth
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# PROVIDE: glim
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# Glim, which files help posts as GitHub issues: daemon(8) runs it as the user
+# glim and starts it again 30 s after it stops, its output in syslog (tag
+# glim). Its token and settings are in glim_env_file (root's, mode 600), which
+# rc.subr exports to it; the GitHub App's key in /usr/local/etc/glim/app.pem
+# (glim's, mode 400); what it keeps, in glim_state (a folder only it reads).
+
+. /etc/rc.subr
+
+name=glim
+rcvar=glim_enable
+load_rc_config $name
+
+: ${glim_enable:=NO}
+: ${glim_env_file:=/usr/local/etc/glim.env}
+: ${glim_state:=/var/db/glim/state.json}
+
+pidfile=/var/run/${name}.pid
+command=/usr/sbin/daemon
+command_args="-f -r -R 30 -S -T ${name} -u ${name} -P ${pidfile} /usr/local/libexec/${name}"
+start_precmd="${name}_precmd"
+
+glim_precmd()
+{
+	if [ ! -s "${glim_env_file}" ] || ! grep -q '^GLIM_TOKEN=..*' "${glim_env_file}"; then
+		echo "${glim_env_file} has no GLIM_TOKEN: fill it in first"
+		return 1
+	fi
+	if [ ! -r /usr/local/etc/glim/app.pem ]; then
+		echo "/usr/local/etc/glim/app.pem is missing: put the GitHub App's key there (owner glim, mode 400)"
+		return 1
+	fi
+	install -d -o glim -g glim -m 700 "$(dirname "${glim_state}")"
+	export GLIM_STATE="${glim_state}"
+}
+
+run_rc_command "$@"

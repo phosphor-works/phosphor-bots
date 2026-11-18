@@ -1,0 +1,11 @@
+# The user the service runs as, and an env file to fill in, made once.
+r=${PKG_ROOTDIR:-}
+pw -R "${r:-/}" groupshow glim > /dev/null 2>&1 || pw -R "${r:-/}" groupadd glim
+pw -R "${r:-/}" usershow glim > /dev/null 2>&1 ||
+	pw -R "${r:-/}" useradd glim -g glim -c "Glim Discord bot" -d /nonexistent -s /usr/sbin/nologin
+# The GitHub App's key goes in this folder, readable by glim alone.
+install -d -o root -g glim -m 750 "$r${PKG_PREFIX}/etc/glim"
+if [ ! -e "$r${PKG_PREFIX}/etc/glim.env" ]; then
+	install -m 600 "$r${PKG_PREFIX}/etc/glim.env.sample" "$r${PKG_PREFIX}/etc/glim.env"
+	echo "glim: fill in ${PKG_PREFIX}/etc/glim.env, put the app key in ${PKG_PREFIX}/etc/glim/app.pem (glim, 400), then: sysrc glim_enable=YES; service glim start"
+fi
