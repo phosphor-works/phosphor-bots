@@ -49,7 +49,8 @@ again, Glim says that too.
 
 ## Settings
 
-Glim reads its settings from the environment. The service exports them from `/usr/local/etc/glim.env`. A `GLIM_` key
+Glim reads its settings from the environment. The service exports them from `/usr/local/etc/glim.env`. The service reads that file as shell, so separate the items of a list with commas, with no spaces: in
+`A=x y`, the shell runs `y` as a command. A `GLIM_` key
 that Glim does not know stops it, and the log names the key.
 
 | Key | Default | Value |

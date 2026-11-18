@@ -62,7 +62,8 @@ heads and releases that exist already.
 
 ## Settings
 
-Wisp reads its settings from the environment. The service exports them from `/usr/local/etc/wisp.env`. A `WISP_`
+Wisp reads its settings from the environment. The service exports them from `/usr/local/etc/wisp.env`. The service reads that file as shell, so separate the items of a list with commas, with no spaces: in
+`A=x y`, the shell runs `y` as a command. A `WISP_`
 key that Wisp does not know stops it, and the log names the key.
 
 | Key | Default | Value |
@@ -70,7 +71,7 @@ key that Wisp does not know stops it, and the log names the key.
 | `WISP_TOKEN` | none (needed) | the Discord bot's token |
 | `GITHUB_TOKEN` | none | a fine-grained token with read-only access to public repositories. The cards and the feed need it |
 | `WISP_ORG` | `phosphor-works` | the GitHub organization |
-| `WISP_REPOS` | each public, unarchived repository that is not a fork | the repositories it follows, separated by spaces or commas |
+| `WISP_REPOS` | each public, unarchived repository that is not a fork | the repositories it follows, separated by commas |
 | `WISP_ALIASES` | none | `alias=Repository` pairs |
 | `WISP_DEFAULT_REPO` | none | the repository of a bare `#123` |
 | `WISP_CHANNEL_REPOS` | none | `channel=Repository` pairs: the repository of a bare `#123` in that channel |
