@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <format>
+#include <utility>
 
 namespace Bots {
 
@@ -105,7 +106,10 @@ std::optional<Json> GitHub::send(const std::string& method, const std::string& p
                   response.status ? std::format("{} {}", response.status, text(answer, "message")) : response.error);
         return std::nullopt;
     }
-    return answer.is_discarded() ? Json() : answer;
+    // Each Json goes into the optional in place: a newer nlohmann/json
+    // converts a Json to std::optional in two ways, so a plain return is
+    // ambiguous there (an error in send, a warning in get).
+    return std::optional<Json>(std::in_place, answer.is_discarded() ? Json() : answer);
 }
 
 std::optional<Item> GitHub::createIssue(const std::string& repo, const std::string& title, const std::string& body,
@@ -146,7 +150,7 @@ std::optional<Json> GitHub::get(const std::string& path, long* status)
 
     if (response.status == 304 && cached != m_cache.end()) {
         m_lastError.clear();
-        return cached->second.body;
+        return std::optional<Json>(std::in_place, cached->second.body);
     }
     if (response.status == 200) {
         Json body = Json::parse(response.body, nullptr, false);
@@ -160,7 +164,7 @@ std::optional<Json> GitHub::get(const std::string& path, long* status)
             m_cache[path] = {etag, body};
         }
         m_lastError.clear();
-        return body;
+        return std::optional<Json>(std::in_place, std::move(body));
     }
     if (response.status == 404 || response.status == 410 || response.status == 301)
         return std::nullopt;
