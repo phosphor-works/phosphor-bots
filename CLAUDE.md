@@ -28,12 +28,11 @@ binary. A new bot is one more folder of this shape, added in the root `CMakeList
 
 ## Build and test
 
-There are no CMake presets. Run the build inside the memory cap of the conventions.
+Run the build inside the memory cap of the conventions. The shared presets build with 3 jobs.
 
 ```sh
-cmake -S . -B build -G Ninja
-cmake --build build -j3
-ctest --test-dir build
+cmake --workflow --preset dev            # configure into build/, build, test
+ctest --test-dir build -R <name>         # one test
 ```
 
 - Needs a C++20 compiler, CMake 3.25, Ninja, libcurl 7.86 or later with WebSocket support, OpenSSL 3 and GoogleTest.
@@ -46,7 +45,9 @@ ctest --test-dir build
 - `sh dist/freebsd/build.sh [OUT]` makes `wisp-<VERSION>.pkg` and `glim-<VERSION>.pkg` and runs the tests first. It
   runs only on FreeBSD. The version comes from `project()` in the root `CMakeLists.txt`.
 
-There is no CI. The checks are the local build with no warnings and `ctest`.
+CI is the shared C++ CI of the workspace repository (`cpp-ci.yml`): the `dev` preset on Arch with GCC, with a warning
+failing the build, the tests, a staged install and a clang-format lint over every tracked file. There is no flake, so
+the Nix jobs are off. CI does not build with Clang or on FreeBSD: check those locally.
 
 ## Rules
 
