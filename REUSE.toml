@@ -9,3 +9,11 @@ version = 1
 path = ".claude/settings.json"
 SPDX-FileCopyrightText = "2026 fuddlesworth"
 SPDX-License-Identifier = "CC0-1.0"
+
+# FreeBSD package files: a package description shows its text to users, and
+# the plist and post-install scripts follow the ports format, so they carry
+# no header.
+[[annotations]]
+path = ["dist/freebsd/*.desc", "dist/freebsd/*.plist", "dist/freebsd/*.post-install"]
+SPDX-FileCopyrightText = "2026 fuddlesworth"
+SPDX-License-Identifier = "GPL-3.0-or-later"
