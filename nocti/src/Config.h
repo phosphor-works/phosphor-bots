@@ -22,6 +22,8 @@ struct Config
     std::set<Snowflake> channels; ///< NOCTI_CHANNELS: where it reads and posts; empty: every channel it sees
     bool direct = true; ///< NOCTI_DIRECT: 0 makes every post a draft
     int directMinutes = 30; ///< NOCTI_DIRECT_MINUTES: the interval of the posts that take one, 10 to 120
+    int greetHours = 24; ///< NOCTI_GREET_HOURS: before a stranger is greeted again, 1 to 720
+    int greetPerHour = 10; ///< NOCTI_GREET_PER_HOUR: greetings an hour, everyone together, 0 to 100
     std::string stateDir; ///< where its state goes (XDG_STATE_HOME/nocti)
     std::string cacheDir; ///< where attachments go (XDG_CACHE_HOME/nocti)
 };

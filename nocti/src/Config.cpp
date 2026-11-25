@@ -16,8 +16,9 @@ namespace Nocti {
 
 namespace {
 
-const std::set<std::string> KnownKeys = {"NOCTI_TOKEN",    "NOCTI_OWNER",  "NOCTI_TRUSTED",
-                                         "NOCTI_CHANNELS", "NOCTI_DIRECT", "NOCTI_DIRECT_MINUTES"};
+const std::set<std::string> KnownKeys = {"NOCTI_TOKEN",       "NOCTI_OWNER",         "NOCTI_TRUSTED",
+                                         "NOCTI_CHANNELS",    "NOCTI_DIRECT",        "NOCTI_DIRECT_MINUTES",
+                                         "NOCTI_GREET_HOURS", "NOCTI_GREET_PER_HOUR"};
 
 [[noreturn]] void fail(const std::string& what)
 {
@@ -126,6 +127,18 @@ Config parseConfig(const std::map<std::string, std::string>& values)
             fail(std::format("NOCTI_DIRECT_MINUTES: \"{}\" is not a number from 10 to 120", minutes));
         config.directMinutes = value;
     }
+    const auto ranged = [&](const char* key, int low, int high, int& into) {
+        const auto text = get(key);
+        if (text.empty())
+            return;
+        int value = 0;
+        const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (ec != std::errc{} || end != text.data() + text.size() || value < low || value > high)
+            fail(std::format("{}: \"{}\" is not a number from {} to {}", key, text, low, high));
+        into = value;
+    };
+    ranged("NOCTI_GREET_HOURS", 1, 720, config.greetHours);
+    ranged("NOCTI_GREET_PER_HOUR", 0, 100, config.greetPerHour);
     return config;
 }
 

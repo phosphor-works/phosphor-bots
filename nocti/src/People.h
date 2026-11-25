@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace Nocti {
 
@@ -20,6 +21,13 @@ enum class Level {
     Trusted, ///< 30 messages an hour
     Allowed, ///< 10 messages an hour, until the allow runs out
     Stranger, ///< nothing reaches the session: counted only
+};
+
+/// An ice: someone whose messages are only counted for a while.
+struct Ice
+{
+    std::int64_t until = 0;
+    std::vector<std::int64_t> strikes; ///< each ice of the last 7 days
 };
 
 struct Allow
@@ -56,6 +64,15 @@ public:
     std::map<Snowflake, Allow> allowed();
     std::set<Snowflake> trusted() const;
 
+    /// Ices @p user: 2 hours, or 1 day when they were iced in the last 7 days.
+    /// Returns its end. Never the owner nor someone he trusts (nothing then).
+    std::optional<std::int64_t> freeze(Snowflake user);
+    bool unfreeze(Snowflake user);
+    /// Their ice's end while it holds.
+    std::optional<std::int64_t> iced(Snowflake user);
+    /// The ices of the last 7 days.
+    int strikes(Snowflake user);
+
     static int hourlyWeight(Level level);
 
 private:
@@ -69,6 +86,7 @@ private:
     std::set<Snowflake> m_untrusted; ///< of NOCTI_TRUSTED, untrusted since
     std::map<Snowflake, Allow> m_allowed;
     std::map<Snowflake, std::deque<std::int64_t>> m_heard;
+    std::map<Snowflake, Ice> m_ice;
     std::string m_path;
     Now m_now;
 };

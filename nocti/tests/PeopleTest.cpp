@@ -62,3 +62,26 @@ TEST(People, KeptBetweenRuns)
               std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
     std::filesystem::remove(path);
 }
+
+TEST(People, IceAndStrikes)
+{
+    std::int64_t now = 1'000'000;
+    People people(1, {2}, "", [&] {
+        return now;
+    });
+    people.allow(3, "Sam", 0);
+    EXPECT_FALSE(people.freeze(1)) << "never the owner";
+    EXPECT_FALSE(people.freeze(2)) << "never someone he trusts";
+    EXPECT_EQ(people.freeze(3), now + 7200) << "2 hours the first time";
+    EXPECT_TRUE(people.iced(3));
+    now += 7200;
+    EXPECT_FALSE(people.iced(3));
+    EXPECT_EQ(people.freeze(3), now + 86400) << "a day after another within 7 days";
+    EXPECT_EQ(people.strikes(3), 2);
+    EXPECT_TRUE(people.unfreeze(3));
+    EXPECT_FALSE(people.iced(3));
+    EXPECT_EQ(people.strikes(3), 2) << "the strikes stay";
+    now += 8 * 86400;
+    EXPECT_EQ(people.strikes(3), 0);
+    EXPECT_EQ(people.freeze(9), now + 7200) << "a stranger too";
+}

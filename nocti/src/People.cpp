@@ -5,6 +5,7 @@
 
 #include "Files.h"
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <format>
@@ -203,6 +204,52 @@ std::map<Snowflake, Allow> People::allowed()
     return m_allowed;
 }
 
+std::optional<std::int64_t> People::freeze(Snowflake user)
+{
+    const Level standing = level(user);
+    if (standing == Level::Owner || standing == Level::Trusted)
+        return std::nullopt;
+    const std::int64_t now = m_now();
+    Ice& ice = m_ice[user];
+    std::erase_if(ice.strikes, [&](std::int64_t when) {
+        return now - when >= 7 * 86400;
+    });
+    const bool again = !ice.strikes.empty();
+    ice.strikes.push_back(now);
+    ice.until = now + (again ? 86400 : 7200);
+    save();
+    return ice.until;
+}
+
+bool People::unfreeze(Snowflake user)
+{
+    const auto it = m_ice.find(user);
+    if (it == m_ice.end() || it->second.until <= m_now())
+        return false;
+    it->second.until = 0; // the strikes stay
+    save();
+    return true;
+}
+
+std::optional<std::int64_t> People::iced(Snowflake user)
+{
+    const auto it = m_ice.find(user);
+    if (it == m_ice.end() || it->second.until <= m_now())
+        return std::nullopt;
+    return it->second.until;
+}
+
+int People::strikes(Snowflake user)
+{
+    const auto it = m_ice.find(user);
+    if (it == m_ice.end())
+        return 0;
+    const std::int64_t now = m_now();
+    return int(std::count_if(it->second.strikes.begin(), it->second.strikes.end(), [&](std::int64_t when) {
+        return now - when < 7 * 86400;
+    }));
+}
+
 void People::load()
 {
     if (m_path.empty())
@@ -221,6 +268,17 @@ void People::load()
     }
     m_trusted = idsOf(json.value("trusted", Json::array()));
     m_untrusted = idsOf(json.value("untrusted", Json::array()));
+    if (json.contains("ice") && json["ice"].is_object()) {
+        for (const auto& [id, ice] : json["ice"].items()) {
+            if (const auto user = parseSnowflake(id)) {
+                Ice parsed{ice.value("until", std::int64_t(0)), {}};
+                for (const auto& when : ice.value("strikes", Json::array()))
+                    if (when.is_number_integer())
+                        parsed.strikes.push_back(when.get<std::int64_t>());
+                m_ice[*user] = std::move(parsed);
+            }
+        }
+    }
     if (json.contains("allowed") && json["allowed"].is_object()) {
         for (const auto& [id, allow] : json["allowed"].items()) {
             if (const auto user = parseSnowflake(id))
@@ -237,9 +295,14 @@ void People::save() const
     Json allowed = Json::object();
     for (const auto& [id, allow] : m_allowed)
         allowed[std::to_string(id)] = {{"name", allow.name}, {"since", allow.since}, {"until", allow.until}};
-    writeFileAtomically(
-        m_path, Json{{"trusted", ids(m_trusted)}, {"untrusted", ids(m_untrusted)}, {"allowed", allowed}}.dump(2) + "\n",
-        "nocti");
+    Json ice = Json::object();
+    for (const auto& [id, entry] : m_ice)
+        ice[std::to_string(id)] = {{"until", entry.until}, {"strikes", entry.strikes}};
+    const Json state = {{"trusted", ids(m_trusted)},
+                        {"untrusted", ids(m_untrusted)},
+                        {"allowed", allowed},
+                        {"ice", ice}};
+    writeFileAtomically(m_path, state.dump(2) + "\n", "nocti");
 }
 
 } // namespace Nocti

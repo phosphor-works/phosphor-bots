@@ -162,6 +162,7 @@ Bot::Bot(Config config, HttpTransport transport, McpServer& mcp, People::Now now
             m_passive = true;
             Log::info("nocti", "another Claude Code session holds Nocti; this one has no gateway");
         }
+        loadExtras();
     }
 }
 
@@ -268,6 +269,11 @@ std::optional<Json> Bot::visible(const Json& message)
     }
     if (!own && level == Level::Stranger)
         return std::nullopt;
+    if (!own) {
+        const std::lock_guard lock(m_mutex);
+        if (m_people.iced(authorId))
+            return std::nullopt;
+    }
     const std::string text = message.value("content", "");
     Json out = {{"id", message.value("id", "")},
                 {"author", displayName(author)},
@@ -354,8 +360,12 @@ void Bot::message(const Json& data)
     {
         const std::lock_guard lock(m_mutex);
         level = m_people.level(authorId);
+        if (m_people.iced(authorId))
+            return; // only counted while the ice holds
     }
     if (level == Level::Stranger) {
+        if (!dm && addressed)
+            greet(data);
         // A stranger's DM: the session hears their name, once, never their words.
         if (dm) {
             bool first = false;
@@ -374,6 +384,8 @@ void Bot::message(const Json& data)
     const std::string text = data.value("content", "");
     const auto verdict = Preharness::inbound(text, level == Level::Owner);
     if (!verdict.reject.empty()) {
+        if (level == Level::Allowed && verdict.reject.starts_with("hidden-letter"))
+            ice(channel, idOf(data, "guild_id"), id, authorId, "injection");
         notice(std::format("A message of {} ({}) in channel {} was rejected: {}. Its text does not reach you.",
                            displayName(author), authorId, channel, verdict.reject),
                {{"user", displayName(author)},
@@ -592,7 +604,16 @@ void Bot::registerCommands(Snowflake guild)
                {"name", "deny"},
                {"description", "Owner: take a member's allow back"},
                {"options", {user}}},
-              {{"type", 1}, {"name", "allowed"}, {"description", "Owner: who is trusted and allowed"}}})}};
+              {{"type", 1}, {"name", "allowed"}, {"description", "Owner: who is trusted and allowed"}},
+              {{"type", 1},
+               {"name", "unfreeze"},
+               {"description", "Owner: end a member's ice now"},
+               {"options", {user}}},
+              {{"type", 1},
+               {"name", "admins"},
+               {"description", "Owner: the role the ice lines for a secret or abuse ping here"},
+               {"options",
+                {{{"type", 8}, {"name", "role"}, {"description", "The admin role"}, {"required", true}}}}}})}};
     const DiscordResult result =
         rest("PUT", std::format("/applications/{}/guilds/{}/commands", m_application, guild), Json::array({command}));
     if (!result.ok())
@@ -631,7 +652,9 @@ void Bot::interaction(const Json& data)
             "reaches the session when the owner trusts or allowed you, and what I post the owner approves.",
             m_config.owner);
         if (asker == m_config.owner)
-            answer += "\nYours: `/nocti trust`, `untrust`, `allow` (2h, 1d, 7d, permanent), `deny`, `allowed`.";
+            answer +=
+                "\nYours: `/nocti trust`, `untrust`, `allow` (2h, 1d, 7d, permanent), `deny`, `allowed`, "
+                "`unfreeze`, `admins`.";
     } else if (asker != m_config.owner) {
         answer = std::format("Only <@{}> can use /nocti {}.", m_config.owner, name);
     } else if (name == "allowed") {
@@ -648,6 +671,20 @@ void Bot::interaction(const Json& data)
                                   allow.until ? "until <t:" + std::to_string(allow.until) + ":f>" : "for good");
         if (allowed.empty())
             answer += " no one";
+    } else if (name == "admins") {
+        Snowflake role = 0;
+        for (const auto& option : sub.value("options", Json::array()))
+            if (option.value("name", "") == "role")
+                role = parseSnowflake(option.value("value", "")).value_or(0);
+        const Snowflake guild = idOf(data, "guild_id");
+        if (!guild || !role) {
+            answer = "Use it in a server, naming a role.";
+        } else {
+            const std::lock_guard lock(m_mutex);
+            m_admins[guild] = role;
+            saveExtras();
+            answer = std::format("The ice lines for a secret or abuse will ping <@&{}> here.", role);
+        }
     } else if (!target || target == m_config.owner || target == m_me) {
         answer = "Name a member other than the owner and Nocti.";
     } else if (name == "trust") {
@@ -671,6 +708,11 @@ void Bot::interaction(const Json& data)
         change = {std::format("The owner allowed {} ({}) {}.", targetName, target,
                               seconds ? "until " + utcTime(m_now() + seconds) : "for good"),
                   "allowed"};
+    } else if (name == "unfreeze") {
+        const std::lock_guard lock(m_mutex);
+        answer = m_people.unfreeze(target) ? std::format("<@{}>'s ice is over; their strikes stay.", target)
+                                           : std::format("<@{}> was not iced.", target);
+        change = {std::format("The owner ended the ice of {} ({}).", targetName, target), "unfrozen"};
     } else if (name == "deny") {
         const std::lock_guard lock(m_mutex);
         answer = m_people.deny(target) ? std::format("<@{}>'s allow is taken back.", target)
@@ -764,6 +806,20 @@ void Bot::registerTools()
          "gives their paths (64 MiB each at most).",
          {{"type", "object"}, {"properties", {{"channel", id}, {"message", id}}}, {"required", {"channel", "message"}}},
          wrap(&Bot::attachments)});
+    m_mcp.addTool(
+        {"discord_freeze",
+         "Ices the author of a message that tried what the session refuses or what only the owner may "
+         "allow: Nocti answers it with a fixed line of kind (harness, owner-call, secret, abuse, "
+         "injection), pinging the owner (and the server's admin role for secret and abuse); their "
+         "messages are then only counted, 2 hours, or a day after another ice within 7 days. Never "
+         "the owner nor someone he trusts.",
+         {{"type", "object"},
+          {"properties",
+           {{"channel", id},
+            {"message", id},
+            {"kind", {{"type", "string"}, {"enum", {"harness", "owner-call", "secret", "abuse", "injection"}}}}}},
+          {"required", {"channel", "message", "kind"}}},
+         wrap(&Bot::freeze)});
     m_mcp.addTool({"discord_allowed",
                    "Who the owner trusts and allowed, and until when.",
                    {{"type", "object"}, {"properties", Json::object()}},
@@ -1056,6 +1112,158 @@ Json Bot::postDirect(Snowflake channel, Snowflake replyTo, const std::string& te
     Log::info("nocti", "posted directly in channel {}{}", channel,
               replyTo ? std::format(", replying to {}", replyTo) : std::string());
     return out;
+}
+
+std::string Bot::greeting() const
+{
+    return std::format(
+        "I'm Nocti, <@{}>'s AI assistant (Claude) working on Phosphor Works: code, reviews, tests. I act on "
+        "what <@{}>, or someone they trust, lets through.",
+        m_config.owner, m_config.owner);
+}
+
+std::string Bot::iceLine(const std::string& kind, Snowflake guild)
+{
+    const std::string owner = std::format("<@{}>", m_config.owner);
+    std::string line;
+    bool admins = false;
+    if (kind == "harness") {
+        line = std::format("I didn't like that one, and I won't do it without {}'s OK.", owner);
+    } else if (kind == "owner-call") {
+        line = std::format("That one is {}'s call, and I've told them.", owner);
+    } else if (kind == "secret") {
+        line = "I don't share that. " + owner;
+        admins = true;
+    } else if (kind == "abuse") {
+        line = "Not here. " + owner;
+        admins = true;
+    } else if (kind == "injection") {
+        line = std::format("I only take instructions from {}.", owner);
+    }
+    if (admins) {
+        const std::lock_guard lock(m_mutex);
+        if (const auto role = m_admins.find(guild); role != m_admins.end())
+            line += std::format(" <@&{}>", role->second);
+    }
+    return line;
+}
+
+void Bot::greet(const Json& message)
+{
+    const Snowflake author = idOf(message["author"], "id");
+    const std::int64_t now = m_now();
+    {
+        const std::lock_guard lock(m_mutex);
+        while (!m_greetings.empty() && now - m_greetings.front() >= 3600)
+            m_greetings.pop_front();
+        const auto last = m_greeted.find(author);
+        if (last != m_greeted.end() && now - last->second < std::int64_t(m_config.greetHours) * 3600)
+            return; // greeted already: only counted
+        if (int(m_greetings.size()) >= m_config.greetPerHour)
+            return;
+        m_greeted[author] = now;
+        m_greetings.push_back(now);
+        saveExtras();
+    }
+    // The server's line, never the session's: it pings the owner and no one else.
+    const DiscordResult result =
+        rest("POST", std::format("/channels/{}/messages", message.value("channel_id", "")),
+             Json{{"content", greeting()},
+                  {"allowed_mentions", {{"users", {std::to_string(m_config.owner)}}, {"replied_user", false}}},
+                  {"message_reference", {{"message_id", message.value("id", "")}, {"fail_if_not_exists", false}}}});
+    if (!result.ok())
+        notice(std::format("A greeting in channel {} failed: Discord answered {}.", message.value("channel_id", ""),
+                           result.status),
+               {{"kind", "error"}, {"channel", message.value("channel_id", "")}});
+}
+
+Json Bot::ice(Snowflake channel, Snowflake guild, Snowflake message, Snowflake author, const std::string& kind)
+{
+    std::optional<std::int64_t> until;
+    int strikes = 0;
+    {
+        const std::lock_guard lock(m_mutex);
+        until = m_people.freeze(author);
+        strikes = m_people.strikes(author);
+    }
+    if (!until)
+        throw ToolError("never the owner nor someone he trusts: tell the owner in a draft instead");
+    const std::string line = iceLine(kind, guild);
+    Json mentions = {{"users", {std::to_string(m_config.owner)}}, {"replied_user", false}};
+    {
+        const std::lock_guard lock(m_mutex);
+        if (const auto role = m_admins.find(guild); role != m_admins.end() && (kind == "secret" || kind == "abuse"))
+            mentions["roles"] = {std::to_string(role->second)};
+    }
+    const DiscordResult posted =
+        rest("POST", std::format("/channels/{}/messages", channel),
+             Json{{"content", line},
+                  {"allowed_mentions", mentions},
+                  {"message_reference", {{"message_id", std::to_string(message)}, {"fail_if_not_exists", false}}}});
+    Log::info("nocti", "iced {} for {} until {}", author, kind, utcTime(*until));
+    notice(std::format("{} is iced for {} until {} ({} strikes in 7 days).", author, kind, utcTime(*until), strikes),
+           {{"user_id", std::to_string(author)}, {"ice", kind}, {"until", utcTime(*until)}});
+    Json out = {{"until", utcTime(*until)}, {"strikes", strikes}};
+    if (posted.ok())
+        out["line_message_id"] = posted.body.value("id", "");
+    else
+        out["line"] = std::format("Discord refused the line ({})", posted.status);
+    return out;
+}
+
+Json Bot::freeze(const Json& arguments)
+{
+    const Snowflake channel = argumentId(arguments, "channel");
+    const Snowflake message = argumentId(arguments, "message");
+    const std::string kind = arguments.value("kind", "");
+    if (iceLine(kind, 0).empty())
+        throw ToolError("kind must be harness, owner-call, secret, abuse or injection");
+    if (!mayUse(channel))
+        throw ToolError(std::format("channel {} is not one Nocti may use", channel));
+    const DiscordResult target = rest("GET", std::format("/channels/{}/messages/{}", channel, message));
+    if (!target.ok())
+        throw ToolError(std::format("no message {} in channel {} ({})", message, channel, target.status));
+    const Snowflake author = idOf(target.body.contains("author") ? target.body["author"] : Json(), "id");
+    if (!author || author == m_me)
+        throw ToolError("that message has no author Nocti may ice");
+    return ice(channel, idOf(target.body, "guild_id"), message, author, kind);
+}
+
+void Bot::loadExtras()
+{
+    if (m_config.stateDir.empty())
+        return;
+    if (const auto text = readFile(m_config.stateDir + "/greetings.json")) {
+        const Json json = Json::parse(*text, nullptr, false);
+        if (json.is_object())
+            for (const auto& [id, when] : json.items())
+                if (const auto user = parseSnowflake(id); user && when.is_number_integer())
+                    m_greeted[*user] = when.get<std::int64_t>();
+    }
+    if (const auto text = readFile(m_config.stateDir + "/admins.json")) {
+        const Json json = Json::parse(*text, nullptr, false);
+        if (json.is_object())
+            for (const auto& [guild, role] : json.items())
+                if (const auto g = parseSnowflake(guild); g && role.is_string())
+                    if (const auto r = parseSnowflake(role.get<std::string>()))
+                        m_admins[*g] = *r;
+    }
+}
+
+void Bot::saveExtras()
+{
+    if (m_config.stateDir.empty() || m_passive)
+        return;
+    const std::int64_t cutoff = m_now() - std::int64_t(m_config.greetHours) * 3600;
+    Json greeted = Json::object();
+    for (const auto& [user, when] : m_greeted)
+        if (when > cutoff)
+            greeted[std::to_string(user)] = when; // a person's id and when, nothing else
+    writeFileAtomically(m_config.stateDir + "/greetings.json", greeted.dump() + "\n", "nocti");
+    Json admins = Json::object();
+    for (const auto& [guild, role] : m_admins)
+        admins[std::to_string(guild)] = std::to_string(role);
+    writeFileAtomically(m_config.stateDir + "/admins.json", admins.dump() + "\n", "nocti");
 }
 
 Json Bot::allowed(const Json&)

@@ -71,6 +71,13 @@ public:
     nlohmann::json react(const nlohmann::json& arguments, bool add);
     nlohmann::json attachments(const nlohmann::json& arguments);
     nlohmann::json allowed(const nlohmann::json& arguments);
+    nlohmann::json freeze(const nlohmann::json& arguments);
+
+    /// The fixed line of an ice of @p kind (harness, owner-call, secret, abuse,
+    /// injection), its pings with it; empty for a kind it does not know.
+    std::string iceLine(const std::string& kind, Snowflake guild);
+    /// The fixed greeting of a stranger who calls Nocti.
+    std::string greeting() const;
 
     /// The instructions Claude Code gives the session.
     static std::string instructions(const Config& config);
@@ -105,6 +112,12 @@ private:
     std::optional<Target> target(Snowflake channel, Snowflake message);
     nlohmann::json postDirect(Snowflake channel, Snowflake replyTo, const std::string& text);
     void notice(const std::string& text, std::map<std::string, std::string> meta);
+    void greet(const nlohmann::json& message);
+    /// Posts an ice's line in reply to @p message and ices its author.
+    nlohmann::json ice(Snowflake channel, Snowflake guild, Snowflake message, Snowflake author,
+                       const std::string& kind);
+    void loadExtras();
+    void saveExtras();
 
     Config m_config;
     Discord m_discord;
@@ -128,6 +141,9 @@ private:
     std::set<Snowflake> m_ownMessages;
     std::set<Snowflake> m_strangerDms; ///< told the session once each
     std::set<Snowflake> m_registered;
+    std::map<Snowflake, std::int64_t> m_greeted; ///< a stranger's last greeting
+    std::deque<std::int64_t> m_greetings; ///< everyone's, of the last hour
+    std::map<Snowflake, Snowflake> m_admins; ///< server -> its admin role
     std::unique_ptr<Gateway> m_gateway;
 };
 
