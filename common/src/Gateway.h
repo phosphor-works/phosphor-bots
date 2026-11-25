@@ -31,6 +31,11 @@ public:
     Gateway(const Gateway&) = delete;
     Gateway& operator=(const Gateway&) = delete;
 
+    /// The intents to ask for (GatewaySession::Intents unless set): before start().
+    void setIntents(int intents)
+    {
+        m_session.setIntents(intents);
+    }
     void start();
     void stop();
 

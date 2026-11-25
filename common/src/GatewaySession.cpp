@@ -119,7 +119,7 @@ std::vector<std::string> GatewaySession::receive(const std::string& text, TimePo
             out.push_back(Json{{"op", Identify},
                                {"d",
                                 {{"token", m_token},
-                                 {"intents", Intents},
+                                 {"intents", m_intents},
                                  {"properties", {{"os", "freebsd"}, {"browser", m_name}, {"device", m_name}}}}}}
                               .dump());
         }

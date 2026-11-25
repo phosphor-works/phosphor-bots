@@ -1,0 +1,9 @@
+// SPDX-FileCopyrightText: 2026 Phosphor Works Team
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+namespace Nocti {
+inline constexpr const char* Version = "@NOCTI_VERSION@";
+inline constexpr const char* HomePage = "https://github.com/phosphor-works/phosphor-bots";
+} // namespace Nocti
