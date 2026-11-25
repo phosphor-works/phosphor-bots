@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 fuddlesworth
+# SPDX-FileCopyrightText: 2026 Phosphor Works Team
 # SPDX-License-Identifier: CC0-1.0
 #
 # Licenses for files that cannot carry an SPDX header.
@@ -7,7 +7,7 @@ version = 1
 
 [[annotations]]
 path = [".claude/settings.json", "CMakePresets.json"]
-SPDX-FileCopyrightText = "2026 fuddlesworth"
+SPDX-FileCopyrightText = "2026 Phosphor Works Team"
 SPDX-License-Identifier = "CC0-1.0"
 
 # FreeBSD package files: a package description shows its text to users, and
@@ -15,5 +15,5 @@ SPDX-License-Identifier = "CC0-1.0"
 # no header.
 [[annotations]]
 path = ["dist/freebsd/*.desc", "dist/freebsd/*.plist", "dist/freebsd/*.post-install"]
-SPDX-FileCopyrightText = "2026 fuddlesworth"
+SPDX-FileCopyrightText = "2026 Phosphor Works Team"
 SPDX-License-Identifier = "GPL-3.0-or-later"
