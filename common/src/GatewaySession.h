@@ -37,6 +37,14 @@ public:
     /// Intents: GUILDS, GUILD_MESSAGES and MESSAGE_CONTENT (privileged: the
     /// application's Message Content Intent must be on).
     static constexpr int Intents = (1 << 0) | (1 << 9) | (1 << 15);
+    /// Beside those: DIRECT_MESSAGES, and the reactions in servers and in DMs.
+    static constexpr int DirectAndReactionIntents = (1 << 12) | (1 << 10) | (1 << 13);
+
+    /// The intents IDENTIFY asks for (Intents unless set): before connecting.
+    void setIntents(int intents)
+    {
+        m_intents = intents;
+    }
 
     /// @p name: the bot's, in IDENTIFY's properties.
     GatewaySession(std::string token, std::string name, Random random = {});
@@ -101,6 +109,7 @@ private:
 
     std::string m_token;
     std::string m_name;
+    int m_intents = Intents;
     Random m_random;
     std::string m_sessionId;
     std::string m_resumeUrl;
