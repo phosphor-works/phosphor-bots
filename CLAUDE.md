@@ -53,7 +53,8 @@ ctest --test-dir build -R <name>         # one test
 
 CI is the shared C++ CI of the workspace repository (`cpp-ci.yml`): the `dev` preset on Arch with GCC, with a warning
 failing the build, the tests, a staged install and a clang-format lint over every tracked file. There is no flake, so
-the Nix jobs are off. CI does not build with Clang or on FreeBSD: check those locally.
+the Nix jobs are off. The `freebsd` job of `ci.yml` runs `dist/freebsd/build.sh` in a FreeBSD 15.1 VM: the build with
+clang and libc++, the tests and the packages. CI does not build with Clang on Linux: check that locally.
 
 ## Rules
 
