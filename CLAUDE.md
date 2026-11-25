@@ -1,17 +1,27 @@
 <!-- SPDX-FileCopyrightText: 2026 Phosphor Works Team -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
+<!-- BEGIN shared: tools/sync writes this block from workspace/sync/claude-header.md. Change it there. -->
 # phosphor-bots
+
+This file has two parts. The rules that every phosphor-works repository follows come first, from the conventions of
+the workspace repository, imported below. The sections after them belong to this repository only: what it is, its
+layout, how to build and test it, and its own rules, code, skills and agents, and links to the other repositories.
+A section here does not repeat a convention. When a section and the conventions disagree, change one of them so
+that they agree.
+
+The Claude Code tooling comes from the plugins that `.claude/settings.json` enables and `workspace/tools/setup`
+installs. The `phosphor-works` plugin has the command guard, the shared skills (`phosphor-works:build`, `debug`,
+`code-audit`, `record-lesson`, `new-repo`), the shared reviewers, and the lesson index, which adds the lessons that
+fit each prompt.
+
+@../workspace/claude/conventions.md
+<!-- END shared -->
+
+## Overview
 
 The bots of phosphor-works, in C++20 with no Qt. Wisp is the project's Discord bot, and Glim files help
 forum posts as GitHub issues. Both run as FreeBSD packages in jails, and both build and test on Linux too.
-
-The rules every phosphor-works repository follows come from the workspace repository, imported below. This file adds
-phosphor-bots's own. The shared Claude Code tooling (the command guard, `phosphor-works:code-audit`, the shared
-reviewers, the lesson index) comes from the `phosphor-works` plugin, which `.claude/settings.json` enables and
-`workspace/tools/setup` installs.
-
-@../workspace/claude/conventions.md
 
 ## Layout
 
@@ -28,8 +38,6 @@ binary. A new bot is one more folder of this shape, added in the root `CMakeList
 
 ## Build and test
 
-Run the build inside the memory cap of the conventions. The shared presets build with 3 jobs.
-
 ```sh
 cmake --workflow --preset dev            # configure into build/, build, test
 ctest --test-dir build -R <name>         # one test
@@ -40,8 +48,6 @@ ctest --test-dir build -R <name>         # one test
   it pins (version, URL and SHA-256, changed together).
 - The root `CMakeLists.txt` sets `-Wall -Wextra -Wpedantic -Wshadow -Wconversion`. A change builds with no warnings
   under GCC and under Clang.
-- FreeBSD 15 builds with clang 19 and libc++ 19, which has no float `std::from_chars`. Use `std::strtod` for a
-  floating-point parse (the program sets no locale). Integer `std::from_chars` is fine.
 - `sh dist/freebsd/build.sh [OUT]` makes `wisp-<VERSION>.pkg` and `glim-<VERSION>.pkg` and runs the tests first. It
   runs only on FreeBSD. The version comes from `project()` in the root `CMakeLists.txt`.
 
@@ -55,11 +61,19 @@ the Nix jobs are off. CI does not build with Clang or on FreeBSD: check those lo
   bot does not know stops it, and the log names the key. A new key goes in `KnownKeys`, the settings table of its
   `docs/` page and the `dist/freebsd/<bot>.env.sample`. The service reads the env file as shell, so a list
   separates its items with commas and no spaces.
-- No token on a command line or in a log line.
 - A message's look follows the Phosphor brand. The colors are in `common/src/Brand.h`, from `palette/phosphor.toml`
   of phosphor-works/branding.
-- Format C++ with `clang-format -i` and the repository's `.clang-format`.
 - `docs/*.md` and the package descriptions are user-facing text.
+
+### License
+
+REUSE-style: the license texts are in `LICENSES/` (`GPL-3.0-or-later`, `CC0-1.0`). Code and documents are
+`GPL-3.0-or-later`. `.gitignore` is `CC0-1.0`. `REUSE.toml` licenses `.claude/settings.json`. nlohmann/json is MIT.
+
+## Code
+
+- FreeBSD 15 builds with clang 19 and libc++ 19, which has no float `std::from_chars`. Use `std::strtod` for a
+  floating-point parse (the program sets no locale). Integer `std::from_chars` is fine.
 
 ## Other repositories
 
@@ -67,8 +81,3 @@ the Nix jobs are off. CI does not build with Clang or on FreeBSD: check those lo
   writes the data they show into `GLIM_FILES_DIR/api/` (`posts.json` and `p/<post>.json`). A change to that JSON is a
   change set with the website's `src/scripts/issues.ts`.
 - branding: the palette in `Brand.h` is a copy. Change it when the branding palette changes.
-
-## License
-
-REUSE-style: the license texts are in `LICENSES/` (`GPL-3.0-or-later`, `CC0-1.0`). Code and documents are
-`GPL-3.0-or-later`. `.gitignore` is `CC0-1.0`. `REUSE.toml` licenses `.claude/settings.json`. nlohmann/json is MIT.
