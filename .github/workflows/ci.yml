@@ -29,3 +29,24 @@ jobs:
     with:
       pin-file: cmake/BotsDependencies.cmake
       nix: false
+
+  # Both bots ship as FreeBSD packages, built with clang and libc++ (no float
+  # std::from_chars there). dist/freebsd/build.sh builds, runs the tests and
+  # makes the packages, in a FreeBSD VM.
+  freebsd:
+    name: FreeBSD
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build, test and package on FreeBSD 15.1
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        with:
+          release: "15.1"
+          prepare: pkg install -y cmake-core ninja pkgconf curl googletest nlohmann-json
+          run: |
+            set -eu
+            sh dist/freebsd/build.sh "$PWD/packages"
+            ls -l packages
