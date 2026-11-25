@@ -74,7 +74,12 @@ public:
     /// The approver while their time runs; 0 for none.
     Snowflake approver();
     std::int64_t approverUntil();
-    void setApprover(Snowflake user, std::int64_t seconds);
+    void setApprover(Snowflake user, std::int64_t seconds, std::string name = {});
+    /// Their name when they were set, for the status line.
+    const std::string& approverName() const
+    {
+        return m_approverName;
+    }
     /// False when there was none.
     bool clearApprover();
     /// The approver whose time ran out since the last call, once.
@@ -115,6 +120,7 @@ private:
     std::optional<Mode> m_ranOut;
     Snowflake m_approver = 0;
     std::int64_t m_approverUntil = 0;
+    std::string m_approverName;
     std::optional<Snowflake> m_approverRanOut;
     std::deque<Waiting> m_queue;
     std::vector<Waiting> m_held;

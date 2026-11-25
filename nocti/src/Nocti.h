@@ -80,6 +80,10 @@ public:
 
     /// Each few seconds: a mode or an approver that ran out, and the queue's turn.
     void tick();
+    /// A permission prompt of Claude Code (NOCTI_RELAY): a card in the owner's DMs.
+    void permissionRequest(const nlohmann::json& params);
+    /// The owner's status line: "nocti: work until 18:00, approves Sam until 26/11 14:07".
+    std::string statusLine();
 
     /// The fixed line of an ice of @p kind (harness, owner-call, secret, abuse,
     /// injection), its pings with it; empty for a kind it does not know.
@@ -136,6 +140,12 @@ private:
     void postQueued(const Waiting& waiting);
     /// Makes drafts of the posts that waited for the owner to be home.
     void releaseHeld(std::vector<Waiting> held);
+    /// Hands the owner's answer to a permission prompt to Claude Code; false for one it does not know.
+    bool verdict(const std::string& request, bool allow);
+    static std::string toneMeans(const std::string& tone);
+    std::string toneOf(Snowflake channel, const std::optional<Channel>& info, const std::string& text);
+    /// The state folder's line file, when what it says changed or each 5 minutes.
+    void writeLine(bool force);
     void loadExtras();
     void saveExtras();
 
@@ -167,6 +177,11 @@ private:
     std::map<Snowflake, Snowflake> m_admins; ///< server -> its admin role
     std::map<Snowflake, Snowflake> m_copies; ///< an approver's copy -> its draft
     std::map<Snowflake, Snowflake> m_dms; ///< a user -> Nocti's DM with them
+    std::map<std::string, Snowflake> m_permissions; ///< an open permission prompt -> its card
+    std::map<Snowflake, std::string> m_permissionCards; ///< a card -> its prompt
+    std::map<Snowflake, std::string> m_tones; ///< a channel -> playful or serious
+    std::string m_line;
+    std::int64_t m_lineWritten = 0;
     std::thread m_ticker;
     bool m_stopTicker = false;
     std::unique_ptr<Gateway> m_gateway;

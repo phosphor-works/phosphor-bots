@@ -135,6 +135,27 @@ TEST(McpServer, ChannelEventsKeepOnlyIdentifierKeys)
     EXPECT_EQ(event["params"]["meta"], (Json{{"kind", "message"}, {"author_id", "42"}}));
 }
 
+TEST(McpServer, ThePermissionRelayIsDeclaredAndItsRequestsHandedOn)
+{
+    std::istringstream in;
+    std::ostringstream out;
+    McpServer server({"nocti", "1", "", true, {}, true}, in, out);
+    std::vector<std::string> heard;
+    server.onNotification = [&](const std::string& method, const Json& params) {
+        heard.push_back(method + " " + params.value("request_id", ""));
+    };
+    server.handleLine(initialize("claude-code"));
+    const Json experimental = Json::parse(out.str())["result"]["capabilities"]["experimental"];
+    EXPECT_TRUE(experimental.contains("claude/channel/permission"));
+    server.handleLine(
+        R"({"jsonrpc":"2.0","method":"notifications/claude/channel/permission_request","params":{"request_id":"abcde"}})");
+    EXPECT_EQ(heard, (std::vector<std::string>{"notifications/claude/channel/permission_request abcde"}));
+    Fixture f;
+    f.server.handleLine(initialize("claude-code"));
+    EXPECT_FALSE(f.lines().at(0)["result"]["capabilities"]["experimental"].contains("claude/channel/permission"))
+        << "only when asked";
+}
+
 TEST(McpServer, RunServesUntilTheInputEnds)
 {
     std::istringstream in(initialize("claude-code") + "\n" + R"({"jsonrpc":"2.0","id":2,"method":"ping"})" + "\r\n");

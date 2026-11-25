@@ -16,9 +16,9 @@ namespace Nocti {
 
 namespace {
 
-const std::set<std::string> KnownKeys = {"NOCTI_TOKEN",       "NOCTI_OWNER",         "NOCTI_TRUSTED",
-                                         "NOCTI_CHANNELS",    "NOCTI_DIRECT",        "NOCTI_DIRECT_MINUTES",
-                                         "NOCTI_GREET_HOURS", "NOCTI_GREET_PER_HOUR"};
+const std::set<std::string> KnownKeys = {"NOCTI_TOKEN",       "NOCTI_OWNER",          "NOCTI_TRUSTED",
+                                         "NOCTI_CHANNELS",    "NOCTI_DIRECT",         "NOCTI_DIRECT_MINUTES",
+                                         "NOCTI_GREET_HOURS", "NOCTI_GREET_PER_HOUR", "NOCTI_RELAY"};
 
 [[noreturn]] void fail(const std::string& what)
 {
@@ -139,6 +139,11 @@ Config parseConfig(const std::map<std::string, std::string>& values)
     };
     ranged("NOCTI_GREET_HOURS", 1, 720, config.greetHours);
     ranged("NOCTI_GREET_PER_HOUR", 0, 100, config.greetPerHour);
+    if (const auto relay = get("NOCTI_RELAY"); !relay.empty()) {
+        if (relay != "0" && relay != "1")
+            fail(std::format("NOCTI_RELAY: \"{}\" is not 0 or 1", relay));
+        config.relay = relay == "1";
+    }
     return config;
 }
 

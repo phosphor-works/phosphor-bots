@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <sstream>
 #include <thread>
@@ -51,7 +52,7 @@ struct World
     std::atomic<std::int64_t> offset{0}; ///< seconds the tests moved the clock on
     std::unique_ptr<Bot> bot;
 
-    explicit World(std::set<Snowflake> channels = {})
+    explicit World(std::set<Snowflake> channels = {}, bool relay = false)
         : state(std::filesystem::temp_directory_path() / std::format("nocti-test-{}-{}", ::getpid(), nextStamp()))
     {
         Config config;
@@ -59,6 +60,7 @@ struct World
         config.owner = Owner;
         config.trusted = {Trusted};
         config.channels = std::move(channels);
+        config.relay = relay;
         config.stateDir = (state / "state").string();
         config.cacheDir = (state / "cache").string();
         bot = std::make_unique<Bot>(
@@ -842,4 +844,137 @@ TEST(NoctiApprover, OnceTheirTimeRunsOutTheirAnswerCountsNoMore)
     EXPECT_EQ(w.count(General), 0u);
     w.bot->tick();
     EXPECT_EQ(w.events().back()["meta"]["approver"], "none");
+}
+
+// ── The permission relay, tones and the status line ───────────────────────
+
+namespace {
+
+std::vector<Json> verdicts(World& w)
+{
+    std::vector<Json> list;
+    std::istringstream lines(w.out.str());
+    for (std::string line; std::getline(lines, line);) {
+        const Json message = Json::parse(line);
+        if (message.value("method", "") == "notifications/claude/channel/permission")
+            list.push_back(message["params"]);
+    }
+    return list;
+}
+
+Json prompt(const std::string& preview = R"({"command": "ls -la"})")
+{
+    return {{"request_id", "abcde"},
+            {"tool_name", "Bash"},
+            {"description", "List the files"},
+            {"input_preview", preview}};
+}
+
+Json dmOf(World& w, Snowflake author, const std::string& text)
+{
+    return w.messageOf(author, text, author == Owner ? OwnerDm : ApproverDm, false, Json(), true);
+}
+
+} // namespace
+
+TEST(NoctiRelay, APromptIsACardAndTheOwnersReplyItsVerdict)
+{
+    World w({}, true);
+    w.bot->permissionRequest(prompt());
+    const auto cards = postedTo(w, OwnerDm);
+    ASSERT_EQ(cards.size(), 1u);
+    EXPECT_NE(std::string(cards[0]["content"]).find("`yes abcde`"), std::string::npos);
+    EXPECT_EQ(cards[0]["embeds"][0]["title"], "Claude Code asks to use Bash");
+    EXPECT_NE(std::string(cards[0]["embeds"][0]["description"]).find("ls -la"), std::string::npos);
+
+    w.say(dmOf(w, Owner, "  Yes ABCDE "));
+    const auto given = verdicts(w);
+    ASSERT_EQ(given.size(), 1u);
+    EXPECT_EQ(given[0], (Json{{"request_id", "abcde"}, {"behavior", "allow"}}));
+    EXPECT_TRUE(w.events().empty()) << "a verdict never reaches the session";
+    EXPECT_EQ(w.edits.back()["embeds"][0]["title"], "Allowed from Discord");
+    w.say(dmOf(w, Owner, "no abcde"));
+    EXPECT_EQ(verdicts(w).size(), 1u) << "answered once";
+}
+
+TEST(NoctiRelay, TheOwnersReactionAnswersToo)
+{
+    World w({}, true);
+    w.bot->permissionRequest(prompt());
+    ownerReacts(w, firstIn(w, OwnerDm), "❌", Trusted);
+    EXPECT_TRUE(verdicts(w).empty()) << "only the owner's";
+    ownerReacts(w, firstIn(w, OwnerDm), "❌");
+    ASSERT_EQ(verdicts(w).size(), 1u);
+    EXPECT_EQ(verdicts(w)[0]["behavior"], "deny");
+}
+
+TEST(NoctiRelay, OnlyTheOwnerAnswersAndOnlyInHisDms)
+{
+    World w({}, true);
+    w.bot->permissionRequest(prompt());
+    w.say(dmOf(w, Trusted, "yes abcde"));
+    w.say(w.messageOf(Owner, "<@900> yes abcde", General, true));
+    w.say(dmOf(w, Owner, "yes abcdl")); // no l in an id
+    EXPECT_TRUE(verdicts(w).empty());
+}
+
+TEST(NoctiRelay, ASecretInTheCallIsWithheld)
+{
+    World w({}, true);
+    w.bot->permissionRequest(
+        prompt(R"({"command": "git push https://ghp_QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ@github.com/x"})"));
+    const std::string card = postedTo(w, OwnerDm)[0].dump();
+    EXPECT_EQ(card.find("ghp_QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"), std::string::npos);
+    EXPECT_NE(card.find("withheld here: it hits the outbound rules (github-token)"), std::string::npos) << card;
+    w.bot->permissionRequest({{"request_id", "fghij"},
+                              {"tool_name", "Write"},
+                              {"description", "Write a file"},
+                              {"input_preview", R"({"file_path": "/home/someone/x.txt"})"}});
+    EXPECT_NE(postedTo(w, OwnerDm)[1].dump().find("/home/someone/x.txt"), std::string::npos) << "paths show";
+}
+
+TEST(NoctiRelay, OffUnlessAskedFor)
+{
+    World w;
+    w.bot->permissionRequest(prompt());
+    EXPECT_EQ(w.count(OwnerDm), 0u);
+    w.say(dmOf(w, Owner, "yes abcde"));
+    EXPECT_TRUE(verdicts(w).empty());
+    EXPECT_EQ(w.events().back()["meta"]["kind"], "message") << "just a message then";
+}
+
+TEST(NoctiTone, AChannelsToneComesWithEachMessage)
+{
+    World w;
+    w.say(w.messageOf(Owner, "<@900> hi", General, true));
+    EXPECT_EQ(w.events().back()["meta"]["tone"], "serious") << "where none is set";
+    w.bot->handle({"INTERACTION_CREATE",
+                   command({{"name", "tone"},
+                            {"type", 1},
+                            {"options",
+                             Json::array({{{"name", "channel"}, {"type", 7}, {"value", GeneralId}},
+                                          {{"name", "tone"}, {"type", 3}, {"value", "playful"}}})}})});
+    EXPECT_EQ(w.events().back()["meta"]["tone"], "playful");
+    w.say(w.messageOf(Owner, "<@900> lol", General, true));
+    EXPECT_EQ(w.events().back()["meta"]["tone"], "playful");
+    w.say(w.messageOf(Owner, "<@900> Serious: is prod down?", General, true));
+    EXPECT_EQ(w.events().back()["meta"]["tone"], "serious (serious:)");
+    w.say(w.messageOf(Owner, "<@900> hey", Elsewhere, true));
+    EXPECT_EQ(w.events().back()["meta"]["tone"], "serious");
+    w.bot->handle({"INTERACTION_CREATE", command({{"name", "tone"}, {"type", 1}})});
+    EXPECT_NE(answer(w).find("<#50>: playful"), std::string::npos) << answer(w);
+}
+
+TEST(NoctiLine, TheStatusLineSaysTheModeAndTheApprover)
+{
+    World w;
+    const auto line = w.state / "state" / "line";
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("work", "8h")});
+    w.bot->handle({"INTERACTION_CREATE", approverCommand(true, Stranger, "1d")});
+    std::string text;
+    std::getline(std::ifstream(line), text);
+    EXPECT_TRUE(text.starts_with("nocti: work until ")) << text;
+    EXPECT_NE(text.find(", approves 300 until "), std::string::npos) << text;
+    w.bot->stop();
+    EXPECT_FALSE(std::filesystem::exists(line)) << "no running Nocti, no line";
 }

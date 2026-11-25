@@ -47,7 +47,8 @@ int main(int argc, char** argv)
     initHttp();
     std::ios::sync_with_stdio(false);
 
-    McpServer mcp({"nocti", Version, Bot::instructions(config), true, {"claude-code"}}, std::cin, std::cout);
+    McpServer mcp({"nocti", Version, Bot::instructions(config), true, {"claude-code"}, config.relay}, std::cin,
+                  std::cout);
     Bot bot(std::move(config), makeCurlTransport(), mcp);
     bot.registerTools();
     // Discord hears nothing until the session is initialized.

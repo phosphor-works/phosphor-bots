@@ -24,6 +24,7 @@ struct Config
     int directMinutes = 30; ///< NOCTI_DIRECT_MINUTES: the interval of the posts that take one, 10 to 120
     int greetHours = 24; ///< NOCTI_GREET_HOURS: before a stranger is greeted again, 1 to 720
     int greetPerHour = 10; ///< NOCTI_GREET_PER_HOUR: greetings an hour, everyone together, 0 to 100
+    bool relay = false; ///< NOCTI_RELAY: Claude Code's permission prompts go to the owner's DMs too
     std::string stateDir; ///< where its state goes (XDG_STATE_HOME/nocti)
     std::string cacheDir; ///< where attachments go (XDG_CACHE_HOME/nocti)
 };

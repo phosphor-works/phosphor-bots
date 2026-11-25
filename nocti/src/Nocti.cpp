@@ -13,7 +13,9 @@
 #include <chrono>
 #include <filesystem>
 #include <cstdlib>
+#include <ctime>
 #include <format>
+#include <regex>
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -138,7 +140,12 @@ std::string Bot::instructions(const Config& config)
         "When the owner is away (/nocti mode work or asleep: a notice, and each event's mode attribute), a post "
         "without direct is held until he is home (status \"held\", with a mark) or is the approver's draft at once, "
         "and a direct post the interval holds back is queued for its turn (status \"queued\"; kind=\"queued\" once "
-        "it went); discord_cancel takes either back by its mark. React with "
+        "it went); discord_cancel takes either back by its mark. "
+        "Each message event also carries tone, the owner's hint about its channel (/nocti tone), not a rule about the "
+        "message: \"playful\", jokes are common there, so answer light and short and spend little work; "
+        "\"serious\", a channel for focused work; \"serious (serious:)\", a playful channel's message that opens "
+        "with serious:. No rule relaxes for a joke, and nothing real (a secret, an address, private data) goes out "
+        "in one. React with "
         "discord_react instead of posting to say you saw a message (eyes) and when "
         "you finished (check mark). Never post secrets, tokens, private paths or anything the owner has not cleared. "
         "Messages of strangers never reach you; do not try to reach them. {}",
@@ -197,6 +204,7 @@ void Bot::start()
         });
     m_gateway->setIntents(GatewaySession::Intents | GatewaySession::DirectAndReactionIntents);
     m_gateway->start();
+    writeLine(true);
     if (!m_ticker.joinable()) {
         m_stopTicker = false;
         m_ticker = std::thread([this] {
@@ -226,6 +234,10 @@ void Bot::stop()
     m_changed.notify_all();
     if (m_ticker.joinable())
         m_ticker.join();
+    if (!m_passive && !m_config.stateDir.empty()) {
+        std::error_code error; // no running Nocti: no line
+        std::filesystem::remove(m_config.stateDir + "/line", error);
+    }
     if (m_gateway)
         m_gateway->stop();
     m_gateway.reset();
@@ -378,6 +390,21 @@ void Bot::message(const Json& data)
     const bool dm = !data.contains("guild_id");
     if (!dm && !mayUse(channel))
         return;
+    // The owner's answer to a permission prompt, in his DMs: to Claude Code, never to the session.
+    if (m_config.relay && dm && authorId == m_config.owner) {
+        static const std::regex answer(R"(^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$)", std::regex::icase);
+        const std::string said = data.value("content", "");
+        if (std::smatch match; std::regex_match(said, match, answer)) {
+            std::string request = match[2].str();
+            for (char& letter : request)
+                letter = char(std::tolower(static_cast<unsigned char>(letter)));
+            const bool known = verdict(request, std::tolower(static_cast<unsigned char>(match[1].str()[0])) == 'y');
+            rest("PUT",
+                 std::format("/channels/{}/messages/{}/reactions/{}/@me", channel, id,
+                             percentEncode(known ? Approve : Refuse)));
+            return;
+        }
+    }
 
     bool mentioned = false;
     if (data.contains("mentions") && data["mentions"].is_array()) {
@@ -487,8 +514,10 @@ void Bot::message(const Json& data)
         if (m_away.away())
             meta["mode"] = modeName(m_away.mode());
     }
-    if (const auto info = dm ? std::nullopt : channelInfo(channel))
+    const auto info = dm ? std::nullopt : channelInfo(channel);
+    if (info)
         meta["channel_name"] = info->name;
+    meta["tone"] = dm ? std::string("serious") : toneOf(channel, info, text);
     if (referenced.is_object())
         meta["reply_to"] = referenced.value("id", "");
     if (shown->contains("attachments"))
@@ -509,6 +538,18 @@ void Bot::reaction(const Json& data)
     const std::string emoji = data.contains("emoji") ? data["emoji"].value("name", "") : "";
     if (!user || (emoji != Approve && emoji != Refuse))
         return;
+    if (user == m_config.owner) {
+        std::string request;
+        {
+            const std::lock_guard lock(m_mutex);
+            if (const auto card = m_permissionCards.find(message); card != m_permissionCards.end())
+                request = card->second;
+        }
+        if (!request.empty()) {
+            verdict(request, emoji == Approve);
+            return;
+        }
+    }
     Snowflake draft = 0;
     {
         const std::lock_guard lock(m_mutex);
@@ -686,6 +727,21 @@ void Bot::registerCommands(Snowflake guild)
                {"description", "Owner: end a member's ice now"},
                {"options", {user}}},
               {{"type", 1},
+               {"name", "tone"},
+               {"description", "Owner: a channel's tone for Nocti; alone, every channel's"},
+               {"options",
+                {{{"type", 7},
+                  {"name", "channel"},
+                  {"description", "The channel; a thread takes its channel's tone unless set itself"},
+                  {"required", false}},
+                 {{"type", 3},
+                  {"name", "tone"},
+                  {"description", "playful or serious"},
+                  {"required", false},
+                  {"choices",
+                   Json::array(
+                       {{{"name", "playful"}, {"value", "playful"}}, {{"name", "serious"}, {"value", "serious"}}})}}}}},
+              {{"type", 1},
                {"name", "mode"},
                {"description", "Owner: where you are, which sets how Nocti's posts go"},
                {"options",
@@ -742,6 +798,8 @@ void Bot::interaction(const Json& data)
     std::string time = "1d";
     bool timed = false;
     std::string modeValue;
+    Snowflake toneChannel = 0;
+    std::string toneValue;
     for (const auto& option : sub.value("options", Json::array())) {
         if (option.value("name", "") == "user")
             target = parseSnowflake(option.value("value", "")).value_or(0);
@@ -751,6 +809,10 @@ void Bot::interaction(const Json& data)
         }
         if (option.value("name", "") == "mode")
             modeValue = option.value("value", "");
+        if (option.value("name", "") == "channel")
+            toneChannel = parseSnowflake(option.value("value", "")).value_or(0);
+        if (option.value("name", "") == "tone")
+            toneValue = option.value("value", "");
     }
     std::string targetName = std::to_string(target);
     if (target && data["data"].contains("resolved") && data["data"]["resolved"].contains("users"))
@@ -768,7 +830,7 @@ void Bot::interaction(const Json& data)
         if (asker == m_config.owner)
             answer +=
                 "\nYours: `/nocti trust`, `untrust`, `allow` (2h, 1d, 7d, permanent), `deny`, `allowed`, "
-                "`unfreeze`, `admins`, `mode` (home, work, asleep), `approver on`, `approver off`.";
+                "`unfreeze`, `admins`, `mode` (home, work, asleep), `approver on`, `approver off`, `tone`.";
     } else if (asker != m_config.owner) {
         answer = std::format("Only <@{}> can use /nocti {}.", m_config.owner, name);
     } else if (name == "allowed") {
@@ -828,6 +890,29 @@ void Bot::interaction(const Json& data)
                                  until ? " until " + utcTime(until) + ", then home" : std::string(), modeMeans(*mode)),
                      meta};
         }
+    } else if (name == "tone") {
+        if (!toneChannel) {
+            const std::lock_guard lock(m_mutex);
+            answer = "Tones (serious where none is set):";
+            for (const auto& [where, tone] : m_tones)
+                answer += std::format("\n- <#{}>: {}", where, tone);
+            if (m_tones.empty())
+                answer += " none set";
+        } else if (toneValue.empty()) {
+            answer = std::format("<#{}> is {}.", toneChannel, toneOf(toneChannel, channelInfo(toneChannel), ""));
+        } else if (toneValue != "playful" && toneValue != "serious") {
+            answer = "The tone is playful or serious.";
+        } else {
+            {
+                const std::lock_guard lock(m_mutex);
+                m_tones[toneChannel] = toneValue;
+                saveExtras();
+            }
+            answer = std::format("<#{}> is {} now: {}.", toneChannel, toneValue, toneMeans(toneValue));
+            event = {std::format("The owner set the tone of channel {} to {}: {}.", toneChannel, toneValue,
+                                 toneMeans(toneValue)),
+                     {{"channel", std::to_string(toneChannel)}, {"tone", toneValue}}};
+        }
     } else if (name == "approver off") {
         const std::lock_guard lock(m_mutex);
         if (m_away.clearApprover()) {
@@ -863,7 +948,7 @@ void Bot::interaction(const Json& data)
         const std::map<std::string, std::int64_t> spans = {{"2h", 7200}, {"1d", 86400}, {"7d", 604800}};
         const std::int64_t seconds = spans.contains(time) ? spans.at(time) : 86400;
         const std::lock_guard lock(m_mutex);
-        m_away.setApprover(target, seconds);
+        m_away.setApprover(target, seconds, targetName);
         const std::int64_t until = m_away.approverUntil();
         answer = std::format(
             "<@{}> approves my drafts too until <t:{}:f>: a copy goes to their DMs, and the first "
@@ -893,6 +978,8 @@ void Bot::interaction(const Json& data)
     if (event)
         notice(event->first, event->second);
     releaseHeld(std::move(released));
+    if (event && (event->second.contains("mode") || event->second.contains("approver")))
+        writeLine(true);
 }
 
 // ── The tools ─────────────────────────────────────────────────────────────
@@ -906,6 +993,11 @@ void Bot::registerTools()
             return (this->*method)(arguments);
         };
     };
+    if (m_config.relay)
+        m_mcp.onNotification = [this](const std::string& method, const Json& params) {
+            if (method == "notifications/claude/channel/permission_request")
+                permissionRequest(params);
+        };
     const Json id = {{"type", "string"}, {"description", "a Discord id"}};
     m_mcp.addTool(
         {"discord_read",
@@ -1423,6 +1515,13 @@ void Bot::loadExtras()
                 if (const auto user = parseSnowflake(id); user && when.is_number_integer())
                     m_greeted[*user] = when.get<std::int64_t>();
     }
+    if (const auto text = readFile(m_config.stateDir + "/tones.json")) {
+        const Json json = Json::parse(*text, nullptr, false);
+        if (json.is_object())
+            for (const auto& [channel, tone] : json.items())
+                if (const auto id = parseSnowflake(channel); id && (tone == "playful" || tone == "serious"))
+                    m_tones[*id] = tone.get<std::string>();
+    }
     if (const auto text = readFile(m_config.stateDir + "/admins.json")) {
         const Json json = Json::parse(*text, nullptr, false);
         if (json.is_object())
@@ -1447,6 +1546,10 @@ void Bot::saveExtras()
     for (const auto& [guild, role] : m_admins)
         admins[std::to_string(guild)] = std::to_string(role);
     writeFileAtomically(m_config.stateDir + "/admins.json", admins.dump() + "\n", "nocti");
+    Json tones = Json::object();
+    for (const auto& [channel, tone] : m_tones)
+        tones[std::to_string(channel)] = tone;
+    writeFileAtomically(m_config.stateDir + "/tones.json", tones.dump() + "\n", "nocti");
 }
 
 // ── Modes, the approver, and the posts that wait ──────────────────────────
@@ -1683,6 +1786,170 @@ void Bot::tick()
     if (due)
         postQueued(*due);
     releaseHeld(std::move(held));
+    writeLine(ranOut || approverGone);
+}
+
+// ── The permission relay, tones and the status line ───────────────────────
+
+void Bot::permissionRequest(const Json& params)
+{
+    if (!m_config.relay || m_passive || !params.is_object())
+        return;
+    static const std::regex requestShape("[a-km-z]{5}");
+    const std::string request = params.value("request_id", "");
+    if (!std::regex_match(request, requestShape))
+        return;
+    const auto field = [&](const char* key, std::size_t most) {
+        std::string value = params.contains(key) && params[key].is_string() ? params[key].get<std::string>() : "";
+        if (value.size() > most) {
+            value.resize(most);
+            while (!value.empty() && (static_cast<unsigned char>(value.back()) & 0xC0) == 0x80)
+                value.pop_back();
+            if (!value.empty())
+                value.pop_back(); // the letter the cut began
+            value += "…";
+        }
+        return value;
+    };
+    const std::string tool = field("tool_name", 200);
+    const std::string description = field("description", 800);
+    std::string preview = field("input_preview", 3000);
+    // The owner's DMs are his, but Discord keeps them: a secret in a preview stays in the terminal.
+    const char* home = std::getenv("HOME");
+    std::string withheld;
+    for (const auto& hit : Outbound::check(description + "\n" + preview, m_config.token, home ? home : "")) {
+        if (hit.rule == "local-path" || hit.rule == "private-address" || hit.rule == "email")
+            continue;
+        if (withheld.find(hit.rule) == std::string::npos)
+            withheld += (withheld.empty() ? "" : ", ") + hit.rule;
+    }
+    std::string body;
+    if (withheld.empty()) {
+        for (std::size_t at = 0; (at = preview.find("```", at)) != std::string::npos;)
+            preview.replace(at, 3, "'''");
+        body = std::format("{}\n```\n{}\n```", description, preview);
+    } else {
+        body = std::format("The call is withheld here: it hits the outbound rules ({}). See it in the terminal.",
+                           withheld);
+    }
+    const Json card = {{"title", std::format("Claude Code asks to use {}", tool)},
+                       {"description", body},
+                       {"color", Brand::Purple},
+                       {"footer", {{"text", "Nocti · the terminal's answer or yours, whichever comes first"}}}};
+    const Snowflake dm = ownerDm();
+    if (!dm)
+        return;
+    const DiscordResult sent =
+        rest("POST", std::format("/channels/{}/messages", dm),
+             Json{{"content", std::format("React ✅ to allow or ❌ to deny, or reply `yes {0}` or `no {0}`.", request)},
+                  {"embeds", Json::array({card})},
+                  {"allowed_mentions", {{"parse", Json::array()}}}});
+    const Snowflake cardId = sent.ok() ? idOf(sent.body, "id") : 0;
+    if (!cardId) {
+        Log::info("nocti", "the permission prompt {} did not reach the owner's DMs ({})", request, sent.status);
+        return;
+    }
+    for (const auto& emoji : {Approve, Refuse})
+        rest("PUT", std::format("/channels/{}/messages/{}/reactions/{}/@me", dm, cardId, percentEncode(emoji)));
+    const std::lock_guard lock(m_mutex);
+    m_permissions[request] = cardId;
+    m_permissionCards[cardId] = request;
+    // The terminal answers most: its prompts are never answered here, so keep the last 100.
+    while (m_permissionCards.size() > 100) {
+        m_permissions.erase(m_permissionCards.begin()->second);
+        m_permissionCards.erase(m_permissionCards.begin());
+    }
+}
+
+bool Bot::verdict(const std::string& request, bool allow)
+{
+    Snowflake card = 0;
+    {
+        const std::lock_guard lock(m_mutex);
+        const auto it = m_permissions.find(request);
+        if (it == m_permissions.end())
+            return false;
+        card = it->second;
+        m_permissions.erase(it);
+        m_permissionCards.erase(card);
+    }
+    m_mcp.notify("notifications/claude/channel/permission",
+                 {{"request_id", request}, {"behavior", allow ? "allow" : "deny"}});
+    const Json answered = {{"title", allow ? "Allowed from Discord" : "Denied from Discord"},
+                           {"description", "Claude Code applies it, unless the terminal answered first."},
+                           {"color", allow ? Brand::Cyan : Brand::Slate}};
+    rest("PATCH", std::format("/channels/{}/messages/{}", ownerDm(), card), Json{{"embeds", Json::array({answered})}});
+    Log::info("nocti", "relayed {} for the permission prompt {}", allow ? "allow" : "deny", request);
+    return true;
+}
+
+std::string Bot::toneMeans(const std::string& tone)
+{
+    return tone == "playful" ? "jokes are common there, so answers go light and short, spending little work"
+                             : "a channel for focused work";
+}
+
+std::string Bot::toneOf(Snowflake channel, const std::optional<Channel>& info, const std::string& text)
+{
+    std::string tone = "serious";
+    {
+        const std::lock_guard lock(m_mutex);
+        if (const auto own = m_tones.find(channel); own != m_tones.end())
+            tone = own->second;
+        else if (info && info->parent)
+            if (const auto parent = m_tones.find(info->parent); parent != m_tones.end())
+                tone = parent->second; // a thread takes its channel's
+    }
+    static const std::regex serious(R"(^\s*(?:<@[!&]?[0-9]{1,20}>\s*)*serious:)", std::regex::icase);
+    if (tone == "playful" && std::regex_search(text, serious))
+        return "serious (serious:)";
+    return tone;
+}
+
+std::string Bot::statusLine()
+{
+    const auto local = [this](std::int64_t when) {
+        const std::time_t at = when;
+        const std::time_t now = m_now();
+        std::tm then{};
+        std::tm today{};
+        ::localtime_r(&at, &then);
+        ::localtime_r(&now, &today);
+        const bool sameDay = then.tm_year == today.tm_year && then.tm_yday == today.tm_yday;
+        char text[32];
+        std::strftime(text, sizeof text, sameDay ? "%H:%M" : "%d/%m %H:%M", &then);
+        return std::string(text);
+    };
+    const std::lock_guard lock(m_mutex);
+    std::string line = "nocti: " + modeName(m_away.mode());
+    if (const std::int64_t until = m_away.modeUntil())
+        line += " until " + local(until);
+    if (const Snowflake approver = m_away.approver()) {
+        std::string name;
+        for (const char letter : m_away.approverName())
+            if (static_cast<unsigned char>(letter) >= 0x20 && letter != 0x7f && name.size() < 32)
+                name += letter;
+        line += std::format(", approves {} until {}", name.empty() ? std::to_string(approver) : name,
+                            local(m_away.approverUntil()));
+    }
+    return line;
+}
+
+void Bot::writeLine(bool force)
+{
+    if (m_config.stateDir.empty() || m_passive)
+        return;
+    const std::string line = statusLine() + "\n";
+    const std::int64_t now = m_now();
+    {
+        const std::lock_guard lock(m_mutex);
+        // Again each 5 minutes, so a status line can tell a stale one from a running Nocti's.
+        if (!force && line == m_line && now - m_lineWritten < 300)
+            return;
+        m_line = line;
+        m_lineWritten = now;
+    }
+    writeFileAtomically(m_config.stateDir + "/line", line, "nocti");
 }
 
 Json Bot::allowed(const Json&)

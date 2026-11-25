@@ -141,8 +141,11 @@ void McpServer::handleLine(const std::string& line)
         const std::string version =
             std::find(versions.begin(), versions.end(), asked) != versions.end() ? asked : versions.front();
         Json capabilities = {{"tools", Json::object()}};
-        if (m_options.channel)
+        if (m_options.channel) {
             capabilities["experimental"] = {{"claude/channel", Json::object()}};
+            if (m_options.permission)
+                capabilities["experimental"]["claude/channel/permission"] = Json::object();
+        }
         Json result = {{"protocolVersion", version},
                        {"capabilities", capabilities},
                        {"serverInfo", {{"name", m_options.name}, {"version", m_options.version}}}};
@@ -159,8 +162,11 @@ void McpServer::handleLine(const std::string& line)
         }
         return;
     }
-    if (!request)
-        return; // a notification it has no use for (cancelled, ...)
+    if (!request) {
+        if (onNotification && !method.empty())
+            onNotification(method, params);
+        return;
+    }
     if (method == "ping") {
         respond(id, Json::object());
         return;

@@ -113,17 +113,45 @@ Away from home a post without `direct` is their draft at once, the owner's comin
 one their DMs refuse leaves the post held. Once their time runs out their answer counts no more. They get nothing
 else: no trust, no command.
 
+## Tones
+
+`/nocti tone channel playful|serious` gives a channel a tone, and each `message` event from it carries it as `tone`: a
+hint to the session, never a rule. `playful`: jokes are common there, so answers go light and short, spending little
+work. `serious`, where none is set and in DMs: a channel for focused work. A thread takes its channel's tone unless it
+has its own. In a playful channel a message that opens with `serious:` (after any mentions) is `serious (serious:)`.
+`/nocti tone` alone lists them; with a channel alone, says its tone.
+
+## The status line
+
+While a session runs Nocti, `~/.local/state/nocti/line` holds one line for the owner's status line, such as
+`nocti: work until 18:00, approves Sam until 26/11 14:07`. It is written at the start, at each change of the mode or the
+approver, and again each 5 minutes, and removed when Nocti stops. `dist/nocti-statusline.sh` prints it while it is
+fresh (10 minutes); in Claude Code's `~/.claude/settings.json`:
+
+    "statusLine": {"type": "command", "command": "~/.local/bin/nocti-statusline.sh"}
+
+or call it from the status line script you have.
+
+## Permission prompts
+
+With `NOCTI_RELAY=1`, Nocti declares Claude Code's permission relay: when the session asks to use a tool (Bash, Write,
+Edit, ...), the prompt also comes to the owner's DMs as a card, with the tool, Claude Code's description and the call.
+His ✅ or ❌ on it, or a reply `yes abcde` or `no abcde` with its id, in his DMs, answers it; the terminal's dialog stays
+open, and the first answer counts. No one else's answer counts, the approver's neither, and an answer never reaches the
+session. Discord keeps the owner's DMs, so a call that hits a secret rule of the outbound filter (a token, a key, a
+secret value, an env line) is withheld from the card: answer it in the terminal. Off by default.
+
 ## Events
 
 With the channel flag (below), each of these wakes the session as `<channel source="nocti" kind="..." ...>`:
 
 | `kind` | When | Its attributes |
 | --- | --- | --- |
-| `message` | a message addressed to Nocti (a mention, a reply to Nocti, a DM) from the owner or someone he trusts or allowed, within their weight, past the pre-harness | `author`, `author_id`, `channel`, `channel_name`, `message_id`, `reply_to`, `trust`, `heard`, `caution`, `let_through_by`, `attachments`, `reply`, `mode` (away from home) |
+| `message` | a message addressed to Nocti (a mention, a reply to Nocti, a DM) from the owner or someone he trusts or allowed, within their weight, past the pre-harness | `author`, `author_id`, `channel`, `channel_name`, `message_id`, `reply_to`, `trust`, `heard`, `caution`, `let_through_by`, `attachments`, `reply`, `tone`, `mode` (away from home) |
 | `draft` | the owner or the approver answered a draft | `draft`, `status` (`sent`, `not sent`), `by` (`owner`, `approver`), `channel`, `message_id` |
 | `queued` | a queued post went at its turn, or failed | `mark`, `status` (`sent`, `failed`), `channel`, `message_id` |
 | `dm` | a stranger wrote to Nocti in DMs: their name, never their words | `author`, `author_id` |
-| `notice` | the pre-harness rejected a message; the owner trusted, untrusted, allowed or denied someone; an ice; a change of the mode or the approver, or one that ran out; held posts released | `user`, `user_id`, `rule`, `trust`, `ice`, `mode`, `until`, `approver`, `held` |
+| `notice` | the pre-harness rejected a message; the owner trusted, untrusted, allowed or denied someone; an ice; a change of the mode, the approver or a tone, or one that ran out; held posts released | `user`, `user_id`, `rule`, `trust`, `ice`, `mode`, `until`, `approver`, `tone`, `channel`, `held` |
 | `error` | the gateway stopped for good; `/nocti` could not be registered | |
 
 ## `/nocti`
@@ -141,12 +169,13 @@ Each answer is seen by its asker alone.
 | `/nocti admins role` | the owner | the role that the ice lines for a secret or abuse ping in this server |
 | `/nocti mode mode [time]` | the owner | home, work or asleep (above) |
 | `/nocti approver on user [time]`, `approver off` | the owner | someone whose DMs get each draft too (above) |
+| `/nocti tone [channel] [tone]` | the owner | a channel's tone, playful or serious (above); alone, every channel's |
 
 ## What it keeps
 
 `~/.local/state/nocti/` (`XDG_STATE_HOME`, folder 700): `people.json` (who is trusted, untrusted, allowed and until
 when, by id), `direct.json` (when each direct post of the last day went, by the message it answered), `greetings.json` (each
-stranger greeted within `NOCTI_GREET_HOURS`: their id and when), `admins.json` (each server's admin role), `away.json` (the mode and until when, the approver and until when, each
+stranger greeted within `NOCTI_GREET_HOURS`: their id and when), `admins.json` (each server's admin role), `tones.json` (each channel's tone the owner set), `line` (the status line, while Nocti runs), `away.json` (the mode and until when, the approver and until when, each
 queued and held post with its text, and how each one of the last day left), and
 `nocti.lock`. `people.json` also holds each ice: its end and its strikes of the last 7 days. Drafts, and the last 500 messages that reached the session, are kept in memory only. It
 logs to stderr what ran or failed, never what was said.
@@ -188,9 +217,11 @@ In the Discord Developer Portal:
    | `NOCTI_DIRECT_MINUTES` | `30` | 10 to 120: the interval of the direct posts that take one |
    | `NOCTI_GREET_HOURS` | `24` | 1 to 720: hours before a stranger is greeted again |
    | `NOCTI_GREET_PER_HOUR` | `10` | 0 to 100: greetings in an hour, everyone together; `0` greets no one |
+   | `NOCTI_RELAY` | `0` | `1`: Claude Code's permission prompts come to the owner's DMs too (above) |
 
    A key it does not know, a key set twice, an id that is no id, and a file that other users may read stop it, naming
    what is wrong.
+   For the status line, also `install -m 755 dist/nocti-statusline.sh ~/.local/bin/`.
 3. Claude Code, for every session of the account:
 
        claude mcp add --scope user nocti -- ~/.local/bin/nocti

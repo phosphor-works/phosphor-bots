@@ -51,6 +51,9 @@ public:
         bool channel = false; ///< declares experimental claude/channel
         /// clientInfo names it serves; empty: any. Another is refused at initialize.
         std::set<std::string> clients;
+        /// declares experimental claude/channel/permission: Claude Code relays
+        /// its permission prompts (only for a channel that knows its sender)
+        bool permission = false;
     };
 
     /// The protocol revisions it speaks, newest first.
@@ -62,6 +65,8 @@ public:
     void addTool(Tool tool);
     /// Called once, on the client's notifications/initialized.
     std::function<void()> onInitialized;
+    /// Each other notification of the client (method, params), on the reading thread.
+    std::function<void(const std::string& method, const nlohmann::json& params)> onNotification;
 
     /// Serves until the input ends, then waits for the tool calls still
     /// running (each sees stopping()).

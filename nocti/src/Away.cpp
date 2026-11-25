@@ -160,9 +160,10 @@ std::int64_t Away::approverUntil()
     return m_approverUntil;
 }
 
-void Away::setApprover(Snowflake user, std::int64_t seconds)
+void Away::setApprover(Snowflake user, std::int64_t seconds, std::string name)
 {
     m_approver = user;
+    m_approverName = std::move(name);
     m_approverUntil = m_now() + seconds;
     m_approverRanOut.reset();
     save();
@@ -276,6 +277,7 @@ void Away::load()
     m_until = json.value("until", std::int64_t(0));
     m_approver = parseSnowflake(json.value("approver", "")).value_or(0);
     m_approverUntil = json.value("approver_until", std::int64_t(0));
+    m_approverName = json.value("approver_name", "");
     m_nextMark = std::max<std::int64_t>(1, json.value("next_mark", std::int64_t(1)));
     for (const auto& item : json.value("queue", Json::array()))
         if (auto waiting = fromJson(item))
@@ -309,6 +311,7 @@ void Away::save()
                         {"until", m_until},
                         {"approver", m_approver ? std::to_string(m_approver) : std::string()},
                         {"approver_until", m_approverUntil},
+                        {"approver_name", m_approver ? m_approverName : std::string()},
                         {"next_mark", m_nextMark},
                         {"queue", queue},
                         {"held", held},
