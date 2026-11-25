@@ -489,3 +489,61 @@ TEST(Nocti, AttachmentsAreSavedPrivately)
     EXPECT_EQ(std::filesystem::status(path).permissions() & std::filesystem::perms::all,
               std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
 }
+
+TEST(NoctiDirect, ADirectReplyToTheOwnerGoesAtOnce)
+{
+    World w;
+    const Json question = w.say(w.messageOf(Owner, "<@900> is CI green?", General, true));
+    EXPECT_NE(std::string(w.events().back()["meta"]["reply"]).find("direct, 3 left"), std::string::npos);
+    const Json answer = w.bot->post({{"channel", std::to_string(General)},
+                                     {"text", "Yes, all three runs passed."},
+                                     {"reply_to", question["id"]},
+                                     {"direct", true}});
+    EXPECT_EQ(answer["status"], "sent");
+    EXPECT_EQ(answer["replies_left"], 2);
+    EXPECT_EQ(w.count(OwnerDm), 0u) << "no draft";
+    EXPECT_EQ(w.posted.back().second["allowed_mentions"]["parse"], Json::array());
+}
+
+TEST(NoctiDirect, AnInternalAddressNeverGoesDirect)
+{
+    World w;
+    const Json question = w.say(w.messageOf(Owner, "<@900> where does it run?", General, true));
+    try {
+        w.bot->post({{"channel", std::to_string(General)},
+                     {"text", "On 10.17.0.7, port 8090."},
+                     {"reply_to", question["id"]},
+                     {"direct", true}});
+        FAIL() << "posted";
+    } catch (const ToolError& error) {
+        const std::string why = error.what();
+        EXPECT_NE(why.find("private-address (line 1, column 4)"), std::string::npos) << why;
+        EXPECT_EQ(why.find("10.17.0.7"), std::string::npos) << "the rule is named, the text never shown";
+    }
+    EXPECT_EQ(w.count(General), 1u);
+}
+
+TEST(NoctiDirect, AStrangersMessageTakesADraft)
+{
+    World w;
+    const Json strangers = w.say(w.messageOf(Stranger, "hello bot"));
+    EXPECT_THROW(
+        w.bot->post(
+            {{"channel", std::to_string(General)}, {"text", "Hi!"}, {"reply_to", strangers["id"]}, {"direct", true}}),
+        ToolError);
+}
+
+TEST(NoctiDirect, APostOfItsOwnOnceAnInterval)
+{
+    World w;
+    EXPECT_EQ(
+        w.bot->post(
+            {{"channel", std::to_string(General)}, {"text", "Release notes are up."}, {"direct", true}})["status"],
+        "sent");
+    try {
+        w.bot->post({{"channel", std::to_string(General)}, {"text", "And another."}, {"direct", true}});
+        FAIL() << "posted twice in an interval";
+    } catch (const ToolError& error) {
+        EXPECT_NE(std::string(error.what()).find("the interval"), std::string::npos);
+    }
+}

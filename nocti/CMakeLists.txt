@@ -6,7 +6,9 @@ configure_file(src/Version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h 
 
 add_library(nocti_core STATIC
     src/Config.cpp
+    src/Direct.cpp
     src/Nocti.cpp
+    src/Outbound.cpp
     src/People.cpp
     src/Preharness.cpp
 )
@@ -20,7 +22,9 @@ install(TARGETS nocti RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(BUILD_TESTING)
     add_executable(nocti_tests
         tests/ConfigTest.cpp
+        tests/DirectTest.cpp
         tests/NoctiTest.cpp
+        tests/OutboundTest.cpp
         tests/PeopleTest.cpp
         tests/PreharnessTest.cpp
     )

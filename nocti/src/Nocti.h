@@ -5,6 +5,7 @@
 
 #include "Common.h"
 #include "Config.h"
+#include "Direct.h"
 #include "Gateway.h"
 #include "GatewaySession.h"
 #include "McpServer.h"
@@ -100,6 +101,9 @@ private:
     void decide(Snowflake draft, bool approved);
     void checkDraft(Snowflake draft);
     nlohmann::json draftAnswer(const Draft& draft) const;
+    /// What a reply to @p message in @p channel would answer, for the policy.
+    std::optional<Target> target(Snowflake channel, Snowflake message);
+    nlohmann::json postDirect(Snowflake channel, Snowflake replyTo, const std::string& text);
     void notice(const std::string& text, std::map<std::string, std::string> meta);
 
     Config m_config;
@@ -114,6 +118,7 @@ private:
     std::recursive_mutex m_mutex; ///< the rest of the state
     std::condition_variable_any m_changed;
     People m_people;
+    DirectPolicy m_direct;
     Snowflake m_me = 0;
     Snowflake m_application = 0;
     Snowflake m_dm = 0;

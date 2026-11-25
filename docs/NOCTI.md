@@ -33,7 +33,7 @@ Before a message reaches the session, the pre-harness checks it:
 | --- | --- |
 | `discord_read(channel, after, limit)` | the messages that may reach the session, oldest first; the others are only counted (`left_out`) |
 | `discord_wait(channel, after, wait)` | the first message after an id from the owner or someone he trusts or allowed, up to 600 s |
-| `discord_post(channel, text, reply_to, wait)` | sends a draft to the owner's DMs with ✅ and ❌; his ✅ posts it, pinging no one; his ❌ drops it; waits up to `wait` s |
+| `discord_post(channel, text, reply_to, wait, direct)` | sends a draft to the owner's DMs with ✅ and ❌; his ✅ posts it, pinging no one; his ❌ drops it; waits up to `wait` s. With `direct`, posts at once where the rules below let it, else names the rule |
 | `discord_post_status(draft, wait)` | waits again on a draft still waiting |
 | `discord_react(channel, message, emoji)` | 👀 (seen), ✅ (done), 👍 (agreed) or ❌ (cannot), at once, on a message the session may read |
 | `discord_unreact(channel, message, emoji)` | takes one of those off |
@@ -42,6 +42,26 @@ Before a message reaches the session, the pre-harness checks it:
 
 Only the owner's reaction on a draft counts. A draft Nocti cannot see answered through the gateway (a reconnect) is
 asked of Discord every 15 s while a tool waits on it.
+
+## Direct posts
+
+A post with `direct` goes out at once, with no draft, only where these rules let it:
+
+| It answers | It goes direct |
+| --- | --- |
+| a message of the owner | up to 3 replies to that message; in DMs, only in his |
+| a message of someone he trusts | up to 3 replies to that message |
+| a message of someone he allowed, Nocti's own message, or nothing (a post of its own) | once an interval (`NOCTI_DIRECT_MINUTES`, 30), one interval for all of them |
+| a stranger's message, a message the pre-harness gave a caution, another person's DM | never: a draft |
+
+Each `message` event's `reply` attribute says how an answer to it goes: `direct, 3 left`, `direct from 14:30 UTC
+(interval 30 min)`, or why a draft only. The counts are kept a day in `direct.json`, so a restart keeps them.
+
+A direct post goes out with no one's check mark, so its text is checked first. A Discord, GitHub or other API token, an
+AWS key, a private key, a long value after `key=`, `token=` or `password=`, a line of an env file, a private or loopback
+address, an e-mail address, a path of this machine's home folder and the bot's own token stop it: the tool names the
+rule, its line and its column, never the text, and the session sends a draft the owner sees. `NOCTI_DIRECT=0` makes
+every post a draft.
 
 ## Events
 
@@ -70,7 +90,7 @@ Each answer is seen by its asker alone.
 ## What it keeps
 
 `~/.local/state/nocti/` (`XDG_STATE_HOME`, folder 700): `people.json` (who is trusted, untrusted, allowed and until
-when, by id) and `nocti.lock`. Drafts, and the last 500 messages that reached the session, are kept in memory only. It
+when, by id), `direct.json` (when each direct post of the last day went, by the message it answered) and `nocti.lock`. Drafts, and the last 500 messages that reached the session, are kept in memory only. It
 logs to stderr what ran or failed, never what was said.
 
 One session drives Nocti at a time: the first to start takes the lock, and the tools of another one say so.
@@ -106,6 +126,8 @@ In the Discord Developer Portal:
    | `NOCTI_OWNER` | none (needed) | the owner's Discord user id |
    | `NOCTI_TRUSTED` | none | ids that start trusted, separated by commas |
    | `NOCTI_CHANNELS` | every channel the bot sees | the channel ids it reads and posts in; a thread of one counts as it |
+   | `NOCTI_DIRECT` | `1` | `0`: every post is a draft |
+   | `NOCTI_DIRECT_MINUTES` | `30` | 10 to 120: the interval of the direct posts that take one |
 
    A key it does not know, a key set twice, an id that is no id, and a file that other users may read stop it, naming
    what is wrong.

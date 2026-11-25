@@ -5,6 +5,7 @@
 
 #include "Files.h"
 
+#include <charconv>
 #include <cstdlib>
 #include <format>
 #include <stdexcept>
@@ -15,7 +16,8 @@ namespace Nocti {
 
 namespace {
 
-const std::set<std::string> KnownKeys = {"NOCTI_TOKEN", "NOCTI_OWNER", "NOCTI_TRUSTED", "NOCTI_CHANNELS"};
+const std::set<std::string> KnownKeys = {"NOCTI_TOKEN",    "NOCTI_OWNER",  "NOCTI_TRUSTED",
+                                         "NOCTI_CHANNELS", "NOCTI_DIRECT", "NOCTI_DIRECT_MINUTES"};
 
 [[noreturn]] void fail(const std::string& what)
 {
@@ -112,6 +114,18 @@ Config parseConfig(const std::map<std::string, std::string>& values)
     config.trusted = ids("NOCTI_TRUSTED", get("NOCTI_TRUSTED"));
     config.trusted.erase(config.owner);
     config.channels = ids("NOCTI_CHANNELS", get("NOCTI_CHANNELS"));
+    if (const auto direct = get("NOCTI_DIRECT"); !direct.empty()) {
+        if (direct != "0" && direct != "1")
+            fail(std::format("NOCTI_DIRECT: \"{}\" is not 0 or 1", direct));
+        config.direct = direct == "1";
+    }
+    if (const auto minutes = get("NOCTI_DIRECT_MINUTES"); !minutes.empty()) {
+        int value = 0;
+        const auto [end, ec] = std::from_chars(minutes.data(), minutes.data() + minutes.size(), value);
+        if (ec != std::errc{} || end != minutes.data() + minutes.size() || value < 10 || value > 120)
+            fail(std::format("NOCTI_DIRECT_MINUTES: \"{}\" is not a number from 10 to 120", minutes));
+        config.directMinutes = value;
+    }
     return config;
 }
 

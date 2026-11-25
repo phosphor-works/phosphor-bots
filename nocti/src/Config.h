@@ -20,6 +20,8 @@ struct Config
     Snowflake owner = 0; ///< NOCTI_OWNER: who approves each draft and lets a stranger through
     std::set<Snowflake> trusted; ///< NOCTI_TRUSTED: who starts trusted, until /nocti untrust
     std::set<Snowflake> channels; ///< NOCTI_CHANNELS: where it reads and posts; empty: every channel it sees
+    bool direct = true; ///< NOCTI_DIRECT: 0 makes every post a draft
+    int directMinutes = 30; ///< NOCTI_DIRECT_MINUTES: the interval of the posts that take one, 10 to 120
     std::string stateDir; ///< where its state goes (XDG_STATE_HOME/nocti)
     std::string cacheDir; ///< where attachments go (XDG_CACHE_HOME/nocti)
 };
