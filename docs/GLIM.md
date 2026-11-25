@@ -3,164 +3,208 @@
 
 # Glim
 
-Glim files posts of the Discord help forum as GitHub issues. It does nothing until someone mentions it. Its avatar is
-the Glim mascot of [branding](https://github.com/phosphor-works/branding) (`svg/mascot/avatar/glim.svg`).
+This page tells staff and operators how Glim works, how to set it up and how to install it. Glim files posts of the
+Discord help forum as GitHub issues. It does nothing until someone mentions it. Its avatar is the Glim mascot of
+[branding](https://github.com/phosphor-works/branding) (`svg/mascot/avatar/glim.svg`).
 
 ## Filing a post
 
-In a post of a forum that `GLIM_FORUMS` names:
+Write one of these messages in a post of a forum that `GLIM_FORUMS` names:
 
-| Written | Does |
+| Written | Result |
 | --- | --- |
-| `@Glim` | files the post in the repository of its project tag (`GLIM_TAG_REPOS`) |
-| `@Glim afterglow` | files the post in that repository (a name, an alias of `GLIM_ALIASES`, or a tag) |
-| `@Glim` again | adds the messages since the last time to the issue, as a comment |
-| `@Glim help` | says how to use it |
+| `@Glim` | Glim files the post in the repository of its project tag (`GLIM_TAG_REPOS`). |
+| `@Glim afterglow` | Glim files the post in that repository. The word is a name, an alias of `GLIM_ALIASES`, or a tag. |
+| `@Glim` again | Glim adds the messages since the last time to the issue, as a comment. |
+| `@Glim help` | Glim tells how to use it. |
 
-Only the author of the post and the members of `GLIM_STAFF_ROLES` can file a post. A reply to one of Glim's messages
-is no request. Glim tells the post when the issue is filed or updated, with a link.
+Only the author of the post and the members of `GLIM_STAFF_ROLES` can file a post. A reply to a message of Glim is
+not a request. When Glim files or updates the issue, it tells the post, with a link.
 
-A post with no project tag, or with more than one, is not filed until the mention names the repository.
+If a post has no project tag, or more than one, Glim files it only when the mention names the repository.
 
 ## What goes to GitHub
 
-A GitHub issue is public. Glim writes:
+A GitHub issue is public. Glim writes these items:
 
-- The post's title as the issue's title.
-- Each message of a person, oldest first, under a heading with its author and time. Bots' messages and bare
-  mentions of Glim are left out.
-- Each author as **Reporter** (the person who opened the post) or **Member N**. One person keeps the same number in
-  the issue and its comments. A mention of someone becomes their name in the issue.
-- An `@word` with a zero-width space after the `@`, so that it pings no one on GitHub.
-- The attached files, kept on our server (`GLIM_FILES_DIR`, served at `GLIM_FILES_URL`) since GitHub's API takes
-  no files and Discord's links to files end after a day:
-  - pictures (PNG, JPEG, WebP, GIF), shown in the issue;
-  - videos (MP4, MOV, WebM), linked;
-  - text files (a log, a configuration), put in the issue cut to `GLIM_TEXT_LIMIT` bytes, and linked whole;
-  - archives (zip, gz, xz, zst, 7z), linked as downloads.
+- The title of the post becomes the title of the issue.
+- Each message of a person goes in, oldest first, under a heading with its author and time. Glim leaves out the
+  messages of bots and the mentions of Glim with no other text.
+- Each author shows as **Reporter** (the person who opened the post) or **Member N**. One person keeps the same
+  number in the issue and its comments. A mention of a person becomes their name in the issue.
+- Each `@word` gets a zero-width space after the `@`, so that it pings no one on GitHub.
+- Glim keeps the attached files on our server (`GLIM_FILES_DIR`, served at `GLIM_FILES_URL`). The API of GitHub takes
+  no files, and the links of Discord to files end after a day.
+- A link to the Discord post goes in. Only members of the server can open it.
 
-  A file's kind is read from its bytes, never from its name, and another kind of file is only named. Before a file is
-  kept, its metadata goes: a photo's EXIF (its place, its camera, its time) but its orientation, XMP and IPTC, PNG's
-  text and time, a GIF's comments, an MP4's or a MOV's user data and location, a WebM's tags. A text file's home
-  folders become `~`. The file's address holds the post's id and a number, not its name. At most `GLIM_FILE_MIB` MiB a
-  file and `GLIM_POST_MIB` MiB a filing are kept.
-- A link to the Discord post, which only members of the server can open.
+Glim handles each kind of attached file as this table shows:
 
-An issue or a comment holds at most 60000 characters. The messages past that are counted, with a link to the post.
+| Kind | Result in the issue |
+| --- | --- |
+| Pictures (PNG, JPEG, WebP, GIF) | Shown |
+| Videos (MP4, MOV, WebM) | Linked |
+| Text files (a log, a configuration) | Put in the issue, cut to `GLIM_TEXT_LIMIT` bytes, and linked whole |
+| Archives (zip, gz, xz, zst, 7z) | Linked as downloads |
+| Other kinds | Only named |
+
+Glim reads the kind of a file from its bytes, never from its name. Before Glim keeps a file, it removes the metadata:
+
+- The EXIF of a photo (its place, its camera, its time), but not its orientation
+- XMP and IPTC
+- The text and time of a PNG
+- The comments of a GIF
+- The user data and location of an MP4 or a MOV
+- The tags of a WebM
+
+In a text file, Glim changes the home folders to `~`. The address of a file holds the id of the post and a number,
+not the name of the file.
 
 Glim cannot see names that people write in their own words. Staff check the issue before they ask for an update.
 
 ## When the issue closes
 
-Every `GLIM_POLL_SECONDS`, Glim looks at the issues of the posts it filed. When an issue closes, Glim says so in its
-post. When the issue is completed, it also adds the forum tag `GLIM_SOLVED_TAG` to the post. When an issue opens
-again, Glim says that too.
+Each `GLIM_POLL_SECONDS`, Glim looks at the issues of the posts that it filed:
+
+- When an issue closes, Glim tells the post.
+- When the issue is completed, Glim also adds the forum tag `GLIM_SOLVED_TAG` to the post.
+- When an issue opens again, Glim tells the post.
 
 ## The issues page
 
-Glim writes what the issues page shows into `GLIM_FILES_DIR/api/`: `posts.json`, each filed post with its repository,
-issue, state, dates and number of kept files, and `p/<post>.json`, one post with its files. It holds the issue's title
-and the post's id, as the files' addresses do, and no Discord name or id of a person. The page itself is built by the
-website (phosphor-works/website) and served beside the files.
+Glim writes the data of the issues page into `GLIM_FILES_DIR/api/`:
+
+| File | Contents |
+| --- | --- |
+| `posts.json` | Each filed post, with its repository, issue, state, dates and number of kept files |
+| `p/<post>.json` | One post with its files |
+
+The data holds the title of the issue and the id of the post, as the addresses of the files do. It holds no Discord
+name or id of a person. The website (phosphor-works/website) builds the page itself, and the page is served next to
+the files.
 
 With `GLIM_STAFF_LISTEN`, Glim also answers its staff on `/staff/api/`:
 
-| Request | Does |
+| Request | Result |
 | --- | --- |
-| `GET /staff/api/me` | says who is signed in |
-| `GET /staff/api/posts` | each filed post, with its files and the ones taken down |
-| `POST /staff/api/posts/<post>/update` | adds what is new in the post to its issue, and tells the post |
-| `POST /staff/api/posts/<post>/files/<n>/remove` | takes the post's file `<n>` (from 1) down |
-| `POST /staff/api/posts/<post>/unlink` | stops following the post; `?files=remove` takes its files down too |
+| `GET /staff/api/me` | Tells who is signed in |
+| `GET /staff/api/posts` | Gives each filed post, with its files and the files that staff took down |
+| `POST /staff/api/posts/<post>/update` | Adds the new messages of the post to its issue, and tells the post |
+| `POST /staff/api/posts/<post>/files/<n>/remove` | Takes down file `<n>` (from 1) of the post |
+| `POST /staff/api/posts/<post>/unlink` | Stops following the post. `?files=remove` also takes its files down. |
 
-Cloudflare Access stands in front of `/staff`. Glim checks the token that Access puts on each request
-(`Cf-Access-Jwt-Assertion`: signed by the team's keys, for the application `GLIM_ACCESS_AUD`, not expired), so a
-request that reaches the API another way is refused. A `POST` also needs the header `X-Glim-Staff`, which a form of
-another site cannot send. Each action is logged with the staff member's email.
+Cloudflare Access is in front of `/staff`. Access puts a token on each request (`Cf-Access-Jwt-Assertion`). Glim checks
+that the keys of the team signed the token, that the token is for the application `GLIM_ACCESS_AUD`, and that the token
+is not expired. Thus Glim refuses a request that reaches the API through another path. A `POST` also needs the header
+`X-Glim-Staff`, which a form of another site cannot send. Glim logs each action with the email of the staff member.
 
 ## Settings
 
-Glim reads its settings from the environment. The service exports them from `/usr/local/etc/glim.env`. The service reads that file as shell, so separate the items of a list with commas, with no spaces: in
-`A=x y`, the shell runs `y` as a command. A `GLIM_` key
-that Glim does not know stops it, and the log names the key.
+Glim reads its settings from the environment. The service exports them from `/usr/local/etc/glim.env`. The service
+reads that file as shell, so separate the items of a list with commas and no spaces. For example, in `A=x y`, the shell
+runs `y` as a command.
+
+If Glim finds a `GLIM_` key that it does not know, it stops, and the log names the key. If a number is outside its
+range, Glim also stops, and the log names the key.
 
 | Key | Default | Value |
 | --- | --- | --- |
-| `GLIM_TOKEN` | none (needed) | the Discord bot's token |
-| `GLIM_APP_ID` | none (needed) | the GitHub App's ID |
-| `GLIM_APP_KEY` | none (needed) | the absolute path of the GitHub App's private key |
-| `GLIM_FORUMS` | none (needed) | the channel ids of the forums whose posts it files |
-| `GLIM_ORG` | `phosphor-works` | the GitHub organization |
-| `GLIM_TAG_REPOS` | none | `tag=Repository` pairs: the repository of a post's tag |
+| `GLIM_TOKEN` | none (needed) | The token of the Discord bot |
+| `GLIM_APP_ID` | none (needed) | The ID of the GitHub App |
+| `GLIM_APP_KEY` | none (needed) | The absolute path of the private key of the GitHub App |
+| `GLIM_FORUMS` | none (needed) | The channel ids of the forums whose posts Glim files |
+| `GLIM_ORG` | `phosphor-works` | The GitHub organization |
+| `GLIM_TAG_REPOS` | none | `tag=Repository` pairs. Each pair gives the repository of a tag of a post. |
 | `GLIM_ALIASES` | none | `alias=Repository` pairs for a mention |
-| `GLIM_STAFF_ROLES` | none | role ids that may file any post |
-| `GLIM_SOLVED_TAG` | `solved` | the forum tag for a completed issue; empty: none |
-| `GLIM_LABELS` | none | labels of a new issue; each must exist in the repository |
-| `GLIM_STATE` | none | the file of its state. The service sets it |
-| `GLIM_POLL_SECONDS` | 300 | the time between looks at the issues, 60 to 3600 |
-| `GLIM_TEXT_LIMIT` | 32768 | the bytes of each attached text file in the issue, 1024 to 60000 |
-| `GLIM_FILES_DIR` | none | the folder where attachments are kept; with `GLIM_FILES_URL` |
-| `GLIM_FILES_URL` | none | the HTTPS address that serves `GLIM_FILES_DIR` |
-| `GLIM_FILE_MIB` | 25 | the MiB of one kept file at most |
-| `GLIM_POST_MIB` | 100 | the MiB of a filing's kept files at most |
-| `GLIM_STAFF_LISTEN` | none (no staff API) | the address and port of the staff API, a jail's: `10.17.0.7:8090` |
-| `GLIM_ACCESS_TEAM` | none | the Cloudflare Zero Trust team in front of the staff API |
-| `GLIM_ACCESS_AUD` | none | the AUD tag of its Access application |
-| `GLIM_STAFF_EMAILS` | anyone Access lets in | the emails that may act, separated by commas |
+| `GLIM_STAFF_ROLES` | none | The role ids that can file each post |
+| `GLIM_SOLVED_TAG` | `solved` | The forum tag for a completed issue. If empty, Glim adds no tag. |
+| `GLIM_LABELS` | none | The labels of a new issue. Each label must exist in the repository. |
+| `GLIM_STATE` | none | The file of its state. The service sets it. |
+| `GLIM_POLL_SECONDS` | 300 | The time between looks at the issues, from 60 to 3600 seconds |
+| `GLIM_TEXT_LIMIT` | 32768 | The bytes of each attached text file in the issue, from 1024 to 60000 |
+| `GLIM_FILES_DIR` | none | The folder where Glim keeps the attachments. Set it with `GLIM_FILES_URL`. |
+| `GLIM_FILES_URL` | none | The HTTPS address that serves `GLIM_FILES_DIR` |
+| `GLIM_FILE_MIB` | 25 | The maximum size of one kept file, from 1 to 500 MiB |
+| `GLIM_POST_MIB` | 100 | The maximum size of the kept files of one filing, from 1 to 2000 MiB |
+| `GLIM_STAFF_LISTEN` | none (no staff API) | The address and port of the staff API in a jail, for example `10.17.0.7:8090` |
+| `GLIM_ACCESS_TEAM` | none | The Cloudflare Zero Trust team in front of the staff API |
+| `GLIM_ACCESS_AUD` | none | The AUD tag of its Access application |
+| `GLIM_STAFF_EMAILS` | anyone Access lets in | The emails that can do actions, separated by commas |
 
 ## Install
 
 ### The GitHub App
 
-In the organization's settings, under Developer settings, GitHub Apps, select New GitHub App:
+In the settings of the organization, go to Developer settings, then GitHub Apps. Select New GitHub App:
 
-1. Name: Phosphor Glim. App names are unique across GitHub, and "Glim" is taken. Its issues show as
-   `phosphor-glim[bot]`. Homepage URL: `https://github.com/phosphor-works/phosphor-bots`.
-2. Logo: render `svg/mascot/avatar/glim.svg` of branding to a PNG.
-3. Webhook: clear **Active**. Glim asks GitHub; GitHub never calls Glim.
-4. Repository permissions: **Issues: Read and write**. Metadata becomes read-only by itself. Give no other
-   permission.
-5. Where can this GitHub App be installed: **Only on this account**.
-6. Create the app. Note its **App ID**.
-7. In the left sidebar, select **Credentials**, then **Key pairs**, then **New key**. GitHub downloads a `.pem` file,
+1. Set the name to Phosphor Glim. App names are unique across GitHub, and "Glim" is taken. The issues of the app show
+   as `phosphor-glim[bot]`.
+2. Set the Homepage URL to `https://github.com/phosphor-works/phosphor-bots`.
+3. For the logo, render `svg/mascot/avatar/glim.svg` of branding to a PNG.
+4. Under Webhook, clear **Active**. Glim asks GitHub, and GitHub never calls Glim.
+5. Under Repository permissions, set **Issues: Read and write**. Metadata becomes read-only automatically. Give no
+   other permission.
+6. Under "Where can this GitHub App be installed", select **Only on this account**.
+7. Create the app.
+8. Write down its **App ID**.
+9. In the left sidebar, select **Credentials**, then **Key pairs**, then **New key**. GitHub downloads a `.pem` file
    and keeps only its public half.
-8. Install the app on the organization, on all repositories.
+10. Install the app on the organization, on all repositories.
 
 ### The Discord application
 
 In the Discord Developer Portal:
 
 1. Make an application named Glim, with the Glim mascot as its avatar (a PNG).
-2. Under Bot, reset the token and put it in the env file. Turn on **Message Content Intent**: Glim reads the post's
-   messages. Turn off **Public Bot** (set the Install Link to None first).
-3. Invite it with only the permissions that it needs: View Channels, Send Messages, Send Messages in Threads, Embed
-   Links, Read Message History, and Manage Threads (to add the solved tag to someone's post):
+2. Under Bot, reset the token.
+3. Put the token in the env file.
+4. Turn on **Message Content Intent**. Glim reads the messages of the post.
+5. Set the Install Link to None.
+6. Turn off **Public Bot**.
+7. Invite the bot with only the permissions that it needs. These are View Channels, Send Messages, Send Messages in
+   Threads, Embed Links, Read Message History, and Manage Threads (to add the solved tag to the post of a person):
 
-       https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permissions=292057861120
+   ```
+   https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permissions=292057861120
+   ```
 
-### The files' server
+### The file server
 
-Serve `GLIM_FILES_DIR` read-only from another jail, so that the jail that answers the internet holds no token and
-cannot change the files. Serve only the names Glim writes (`/<post>/<message>-<n>.<extension>`), with
-`X-Content-Type-Options: nosniff`, a Content-Security-Policy of `default-src 'none'; img-src 'self'; media-src 'self';
-sandbox`, and archives with `Content-Disposition: attachment`. To take a file down, delete it from the folder.
+Serve `GLIM_FILES_DIR` read-only from another jail. Then the jail that answers the internet holds no token and cannot
+change the files. The server must obey these rules:
+
+- Serve only the names that Glim writes (`/<post>/<message>-<n>.<extension>`).
+- Send `X-Content-Type-Options: nosniff`.
+- Send a Content-Security-Policy of `default-src 'none'; img-src 'self'; media-src 'self'; sandbox`.
+- Send archives with `Content-Disposition: attachment`.
+
+To take a file down, delete it from the folder.
 
 ### The service
 
 1. Install the package in the jail.
-2. Put the app's key in `/usr/local/etc/glim/app.pem`, owner `glim`, mode 400.
-3. Fill in `/usr/local/etc/glim.env` (root's, mode 600).
+2. Put the key of the app in `/usr/local/etc/glim/app.pem`, with owner `glim` and mode 400.
+3. Fill in `/usr/local/etc/glim.env` (owner root, mode 600).
 4. Turn the service on and start it:
 
-       sysrc glim_enable=YES
-       service glim start
+   ```sh
+   sysrc glim_enable=YES
+   service glim start
+   ```
 
-The service runs `/usr/local/libexec/glim` as the user `glim` under daemon(8), its log in syslog with the tag `glim`.
-Its state is `/var/db/glim/state.json`: for each filed post, its issue, the last message filed and the Discord ids
-of its authors, which leave the server only as "Member N".
+The service runs `/usr/local/libexec/glim` as the user `glim` under daemon(8). Its log goes to syslog with the tag
+`glim`. Its state is in `/var/db/glim/state.json`. For each filed post, the state holds the issue, the last filed
+message and the Discord ids of the authors. These ids leave the server only as "Member N".
 
 ## Security
 
-- The bot listens on no port, and debuggers of its own user cannot read its memory.
-- It writes to GitHub only issues and comments, through an app that may do nothing else. Its token lasts an hour.
-- The app's key never leaves the jail. Glim reads it once, at its start.
+- The bot listens on no port. Debuggers of its own user cannot read its memory.
+- It writes only issues and comments to GitHub, through an app that has no other permission. Its token lasts one hour.
+- The key of the app never leaves the jail. Glim reads it one time, when it starts.
+
+## Limits
+
+| Item | Limit | At the limit |
+| --- | --- | --- |
+| One kept file | `GLIM_FILE_MIB` MiB | Glim does not keep the file. |
+| All kept files of one filing | `GLIM_POST_MIB` MiB | Glim does not keep more files. |
+| One issue or one comment | 60000 characters | Glim counts the messages after the limit and adds a link to the post. |
