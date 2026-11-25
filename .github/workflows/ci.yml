@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 fuddlesworth
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Pull request and main CI. The jobs (Arch, Lint) are the shared C++ CI of the
+# workspace repository (.github/workflows/cpp-ci.yml), which says what each one
+# does. This file passes only what differs here. There is no flake, so the Nix
+# jobs are off. The FreeBSD packages are built by hand with
+# dist/freebsd/build.sh, which runs only on FreeBSD.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: CI
+    uses: phosphor-works/workspace/.github/workflows/cpp-ci.yml@main
+    with:
+      pin-file: cmake/BotsDependencies.cmake
+      nix: false

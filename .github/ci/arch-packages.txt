@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 fuddlesworth
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The Arch packages CI installs to build and test the bots. One on each line.
+gcc
+cmake
+ninja
+ccache
+curl
+openssl
+gtest
+nlohmann-json
