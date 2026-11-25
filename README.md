@@ -9,9 +9,10 @@ The bots of [phosphor-works](https://github.com/phosphor-works), as FreeBSD pack
 | --- | --- |
 | [Wisp](docs/WISP.md) (`wisp/`) | The Discord bot. It links the issues and pull requests that a message names, keeps a card for each open pull request and issue, and posts each push to a default branch and each release. |
 | [Glim](docs/GLIM.md) (`glim/`) | Files a post of the help forum as a GitHub issue when someone mentions it, adds what is new on the next mention, and says in the post when the issue closes. |
+| [Nocti](docs/NOCTI.md) (`nocti/`) | A Claude Code session on Discord as a bot of its own, on the owner's machine: it reads and waits through MCP tools, posts only through drafts the owner approves, and wakes the session as a Claude Code channel when someone it trusts addresses it. |
 
 `common/` is the library that the bots share: HTTP through libcurl, Discord's REST API and gateway, and GitHub's REST
-API with ETags and as a GitHub App. It is C++20 and uses no Qt.
+API with ETags and as a GitHub App, an HTTP server for one proxy, and an MCP server on stdio. It is C++20 and uses no Qt.
 
 ## Build and test
 

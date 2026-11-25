@@ -12,6 +12,7 @@ add_library(bots_common STATIC
     src/Http.cpp
     src/HttpServer.cpp
     src/Log.cpp
+    src/McpServer.cpp
     src/Service.cpp
 )
 target_include_directories(bots_common PUBLIC src)
@@ -25,6 +26,7 @@ if(BUILD_TESTING)
         tests/GitHubAppTest.cpp
         tests/GitHubTest.cpp
         tests/HttpServerTest.cpp
+        tests/McpServerTest.cpp
     )
     target_link_libraries(bots_common_tests PRIVATE bots_common GTest::gtest_main)
     gtest_discover_tests(bots_common_tests)
