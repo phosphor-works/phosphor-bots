@@ -29,6 +29,9 @@ constexpr std::size_t MaxText = 2000;
 constexpr std::size_t KeptRecent = 500;
 constexpr long long MaxAttachment = 64LL << 20;
 constexpr auto DraftRecheck = std::chrono::seconds(15);
+constexpr auto TickEvery = std::chrono::seconds(5);
+constexpr int Silent = 1 << 12; // Discord's SUPPRESS_NOTIFICATIONS: a message that wakes no one
+constexpr std::size_t Preview = 80; // bytes of a held post the summary shows
 const std::string Approve = "✅"; // ✅
 const std::string Refuse = "❌"; // ❌
 
@@ -131,7 +134,11 @@ std::string Bot::instructions(const Config& config)
         "reply_to=the message_id). A post is a draft the owner approves with a check mark in his DMs, so write it as "
         "the post itself; with direct=true it goes at once where the rules let it (the event's reply attribute says "
         "how an answer goes: up to 3 direct replies to the owner's or a trusted person's message, a post of its own "
-        "once an interval, a draft for anything else), else the tool names the rule and you send a draft. React with "
+        "once an interval, a draft for anything else), else the tool names the rule and you send a draft. "
+        "When the owner is away (/nocti mode work or asleep: a notice, and each event's mode attribute), a post "
+        "without direct is held until he is home (status \"held\", with a mark) or is the approver's draft at once, "
+        "and a direct post the interval holds back is queued for its turn (status \"queued\"; kind=\"queued\" once "
+        "it went); discord_cancel takes either back by its mark. React with "
         "discord_react instead of posting to say you saw a message (eyes) and when "
         "you finished (check mark). Never post secrets, tokens, private paths or anything the owner has not cleared. "
         "Messages of strangers never reach you; do not try to reach them. {}",
@@ -151,6 +158,7 @@ Bot::Bot(Config config, HttpTransport transport, McpServer& mcp, People::Now now
                m_config.stateDir.empty() ? std::string() : m_config.stateDir + "/people.json", m_now)
     , m_direct(std::chrono::minutes(m_config.directMinutes),
                m_config.stateDir.empty() ? std::string() : m_config.stateDir + "/direct.json", m_now)
+    , m_away(m_config.stateDir.empty() ? std::string() : m_config.stateDir + "/away.json", m_now)
 {
     if (!m_config.stateDir.empty()) {
         std::error_code error;
@@ -164,6 +172,7 @@ Bot::Bot(Config config, HttpTransport transport, McpServer& mcp, People::Now now
         }
         loadExtras();
     }
+    syncInterval();
 }
 
 Bot::~Bot()
@@ -188,10 +197,35 @@ void Bot::start()
         });
     m_gateway->setIntents(GatewaySession::Intents | GatewaySession::DirectAndReactionIntents);
     m_gateway->start();
+    if (!m_ticker.joinable()) {
+        m_stopTicker = false;
+        m_ticker = std::thread([this] {
+            std::unique_lock lock(m_mutex);
+            while (!m_stopTicker) {
+                lock.unlock();
+                try {
+                    tick();
+                } catch (const std::exception& error) {
+                    Log::info("nocti", "a tick failed: {}", error.what());
+                }
+                lock.lock();
+                m_changed.wait_for(lock, TickEvery, [this] {
+                    return m_stopTicker;
+                });
+            }
+        });
+    }
 }
 
 void Bot::stop()
 {
+    {
+        const std::lock_guard lock(m_mutex);
+        m_stopTicker = true;
+    }
+    m_changed.notify_all();
+    if (m_ticker.joinable())
+        m_ticker.join();
     if (m_gateway)
         m_gateway->stop();
     m_gateway.reset();
@@ -450,6 +484,8 @@ void Bot::message(const Json& data)
         const std::lock_guard lock(m_mutex);
         meta["reply"] =
             m_config.direct ? m_direct.describe(answering) + "; a draft always may go" : "a draft (NOCTI_DIRECT=0)";
+        if (m_away.away())
+            meta["mode"] = modeName(m_away.mode());
     }
     if (const auto info = dm ? std::nullopt : channelInfo(channel))
         meta["channel_name"] = info->name;
@@ -468,23 +504,31 @@ void Bot::message(const Json& data)
 
 void Bot::reaction(const Json& data)
 {
-    if (idOf(data, "user_id") != m_config.owner)
-        return;
+    const Snowflake user = idOf(data, "user_id");
     const Snowflake message = idOf(data, "message_id");
     const std::string emoji = data.contains("emoji") ? data["emoji"].value("name", "") : "";
+    if (!user || (emoji != Approve && emoji != Refuse))
+        return;
+    Snowflake draft = 0;
     {
         const std::lock_guard lock(m_mutex);
-        const auto draft = m_drafts.find(message);
-        if (draft == m_drafts.end() || draft->second.status != "waiting")
-            return;
+        if (user == m_config.owner) {
+            if (const auto it = m_drafts.find(message); it != m_drafts.end() && it->second.status == "waiting")
+                draft = message;
+        } else if (user == m_away.approver()) {
+            // The approver's answer counts on their own copy, while their time runs.
+            if (const auto copy = m_copies.find(message); copy != m_copies.end()) {
+                const auto it = m_drafts.find(copy->second);
+                if (it != m_drafts.end() && it->second.status == "waiting" && it->second.approver == user)
+                    draft = copy->second;
+            }
+        }
     }
-    if (emoji == Approve)
-        decide(message, true);
-    else if (emoji == Refuse)
-        decide(message, false);
+    if (draft)
+        decide(draft, emoji == Approve, user);
 }
 
-void Bot::decide(Snowflake id, bool approved)
+void Bot::decide(Snowflake id, bool approved, Snowflake by)
 {
     Draft draft;
     {
@@ -495,6 +539,8 @@ void Bot::decide(Snowflake id, bool approved)
         it->second.status = "deciding"; // no second answer posts it twice
         draft = it->second;
     }
+    const bool owner = by == m_config.owner;
+    const std::string who = owner ? std::string("the owner") : std::format("<@{}>, the approver,", by);
     Json card;
     if (approved) {
         Json body = {{"content", draft.text},
@@ -510,7 +556,9 @@ void Bot::decide(Snowflake id, bool approved)
             card = {{"title", "Posted"},
                     {"url", draft.link},
                     {"color", Brand::Purple},
-                    {"description", std::format("In <#{}>.", draft.channel)}};
+                    {"description",
+                     std::format("In <#{}>. Approved by {}.", draft.channel,
+                                 owner ? "the owner" : std::format("<@{}>, the approver", by))}};
         } else {
             draft.status = "not sent";
             card = {{"title", "Not sent: Discord refused it"},
@@ -519,9 +567,15 @@ void Bot::decide(Snowflake id, bool approved)
         }
     } else {
         draft.status = "not sent";
-        card = {{"title", "Not sent"}, {"color", Brand::Slate}, {"description", "The owner dropped this draft."}};
+        card = {{"title", "Not sent"},
+                {"color", Brand::Slate},
+                {"description",
+                 std::format("Dropped by {}.", owner ? "the owner" : std::format("<@{}>, the approver", by))}};
     }
     rest("PATCH", std::format("/channels/{}/messages/{}", draft.dm, draft.id), Json{{"embeds", Json::array({card})}});
+    if (draft.copy)
+        rest("PATCH", std::format("/channels/{}/messages/{}", draft.copyDm, draft.copy),
+             Json{{"embeds", Json::array({card})}});
     {
         const std::lock_guard lock(m_mutex);
         m_drafts[id] = draft;
@@ -532,11 +586,13 @@ void Bot::decide(Snowflake id, bool approved)
     std::map<std::string, std::string> meta = {{"kind", "draft"},
                                                {"draft", std::to_string(id)},
                                                {"status", draft.status},
-                                               {"channel", std::to_string(draft.channel)}};
+                                               {"channel", std::to_string(draft.channel)},
+                                               {"by", owner ? "owner" : "approver"}};
     if (draft.posted)
         meta["message_id"] = std::to_string(draft.posted);
-    m_mcp.channel(draft.status == "sent" ? "The owner approved the draft; it is posted: " + draft.link
-                                         : "The draft was not sent.",
+    m_mcp.channel(draft.status == "sent" ? std::format("{} approved the draft; it is posted: {}", who, draft.link)
+                                         : std::format("The draft was not sent ({}).",
+                                                       approved ? "Discord refused it" : who + " dropped it"),
                   meta);
 }
 
@@ -550,20 +606,32 @@ void Bot::checkDraft(Snowflake id)
             return;
         draft = it->second;
     }
-    // The gateway may have dropped the owner's reaction (a reconnect): ask.
-    for (const auto& [emoji, approved] : {std::pair{Approve, true}, std::pair{Refuse, false}}) {
-        const DiscordResult result = rest(
-            "GET",
-            std::format("/channels/{}/messages/{}/reactions/{}?limit=100", draft.dm, draft.id, percentEncode(emoji)));
-        if (!result.ok() || !result.body.is_array())
-            continue;
-        for (const auto& user : result.body) {
-            if (idOf(user, "id") == m_config.owner) {
-                decide(id, approved);
-                return;
-            }
-        }
+    Snowflake approver = 0;
+    {
+        const std::lock_guard lock(m_mutex);
+        approver = m_away.approver();
     }
+    // The gateway may have dropped an answer (a reconnect): ask.
+    const auto answered = [&](Snowflake channel, Snowflake message, Snowflake who) -> std::optional<bool> {
+        for (const auto& [emoji, approved] : {std::pair{Approve, true}, std::pair{Refuse, false}}) {
+            const DiscordResult result = rest(
+                "GET",
+                std::format("/channels/{}/messages/{}/reactions/{}?limit=100", channel, message, percentEncode(emoji)));
+            if (!result.ok() || !result.body.is_array())
+                continue;
+            for (const auto& user : result.body)
+                if (idOf(user, "id") == who)
+                    return approved;
+        }
+        return std::nullopt;
+    };
+    if (const auto approved = answered(draft.dm, draft.id, m_config.owner)) {
+        decide(id, *approved, m_config.owner);
+        return;
+    }
+    if (draft.copy && approver && approver == draft.approver)
+        if (const auto approved = answered(draft.copyDm, draft.copy, approver))
+            decide(id, *approved, approver);
 }
 
 // ── The slash command ─────────────────────────────────────────────────────
@@ -585,6 +653,14 @@ void Bot::registerCommands(Snowflake guild)
                                      {{"name", "1 day"}, {"value", "1d"}},
                                      {{"name", "7 days"}, {"value", "7d"}},
                                      {{"name", "permanent"}, {"value", "perm"}}})}};
+    const Json approveTime = {{"type", 3},
+                              {"name", "time"},
+                              {"description", "How long (1 day when none)"},
+                              {"required", false},
+                              {"choices",
+                               Json::array({{{"name", "2 hours"}, {"value", "2h"}},
+                                            {{"name", "1 day"}, {"value", "1d"}},
+                                            {{"name", "7 days"}, {"value", "7d"}}})}};
     const Json command = {
         {"name", "nocti"},
         {"description", "Nocti, the owner's Claude Code session on Discord"},
@@ -610,6 +686,31 @@ void Bot::registerCommands(Snowflake guild)
                {"description", "Owner: end a member's ice now"},
                {"options", {user}}},
               {{"type", 1},
+               {"name", "mode"},
+               {"description", "Owner: where you are, which sets how Nocti's posts go"},
+               {"options",
+                {{{"type", 3},
+                  {"name", "mode"},
+                  {"description", "home, work or asleep"},
+                  {"required", true},
+                  {"choices",
+                   Json::array({{{"name", "home"}, {"value", "home"}},
+                                {{"name", "work"}, {"value", "work"}},
+                                {{"name", "asleep"}, {"value", "asleep"}}})}},
+                 {{"type", 3},
+                  {"name", "time"},
+                  {"description", "How long, as 30m, 8h or 1d (7d at most), then home; none: until the next change"},
+                  {"required", false}}}}},
+              {{"type", 2},
+               {"name", "approver"},
+               {"description", "Owner: someone who approves Nocti's drafts too"},
+               {"options",
+                Json::array({{{"type", 1},
+                              {"name", "on"},
+                              {"description", "Owner: let a member approve Nocti's drafts for a time"},
+                              {"options", {user, approveTime}}},
+                             {{"type", 1}, {"name", "off"}, {"description", "Owner: no approver"}}})}},
+              {{"type", 1},
                {"name", "admins"},
                {"description", "Owner: the role the ice lines for a secret or abuse ping here"},
                {"options",
@@ -630,15 +731,26 @@ void Bot::interaction(const Json& data)
     const Json& user = data.contains("member") ? data["member"]["user"] : data.contains("user") ? data["user"] : Json();
     const Snowflake asker = idOf(user, "id");
     const Json& options = data["data"].value("options", Json::array());
-    const Json sub = options.empty() ? Json() : options[0];
-    const std::string name = sub.value("name", "help");
+    Json sub = options.empty() ? Json() : options[0];
+    std::string name = sub.value("name", "help");
+    if (sub.value("type", 1) == 2) { // a group: "approver on"
+        const Json inner = sub.value("options", Json::array()).empty() ? Json() : sub["options"][0];
+        name += " " + inner.value("name", "");
+        sub = inner;
+    }
     Snowflake target = 0;
     std::string time = "1d";
+    bool timed = false;
+    std::string modeValue;
     for (const auto& option : sub.value("options", Json::array())) {
         if (option.value("name", "") == "user")
             target = parseSnowflake(option.value("value", "")).value_or(0);
-        if (option.value("name", "") == "time")
+        if (option.value("name", "") == "time") {
             time = option.value("value", "1d");
+            timed = true;
+        }
+        if (option.value("name", "") == "mode")
+            modeValue = option.value("value", "");
     }
     std::string targetName = std::to_string(target);
     if (target && data["data"].contains("resolved") && data["data"]["resolved"].contains("users"))
@@ -646,6 +758,8 @@ void Bot::interaction(const Json& data)
 
     std::string answer;
     std::optional<std::pair<std::string, std::string>> change; // the notice, and what changed
+    std::optional<std::pair<std::string, std::map<std::string, std::string>>> event; // a mode's or approver's notice
+    std::vector<Waiting> released;
     if (name == "help") {
         answer = std::format(
             "I'm Nocti, <@{}>'s Claude Code session on Discord. To ask me something, mention @Nocti; it "
@@ -654,7 +768,7 @@ void Bot::interaction(const Json& data)
         if (asker == m_config.owner)
             answer +=
                 "\nYours: `/nocti trust`, `untrust`, `allow` (2h, 1d, 7d, permanent), `deny`, `allowed`, "
-                "`unfreeze`, `admins`.";
+                "`unfreeze`, `admins`, `mode` (home, work, asleep), `approver on`, `approver off`.";
     } else if (asker != m_config.owner) {
         answer = std::format("Only <@{}> can use /nocti {}.", m_config.owner, name);
     } else if (name == "allowed") {
@@ -685,6 +799,43 @@ void Bot::interaction(const Json& data)
             saveExtras();
             answer = std::format("The ice lines for a secret or abuse will ping <@&{}> here.", role);
         }
+    } else if (name == "mode") {
+        const auto mode = parseMode(modeValue);
+        const auto span = timed ? parseSpan(time) : std::optional<std::int64_t>(0);
+        if (!mode) {
+            answer = "The mode is home, work or asleep.";
+        } else if (!span) {
+            answer = "The time is a number and m, h or d, as 30m, 8h or 1d: 7 days at most.";
+        } else {
+            std::int64_t until = 0;
+            {
+                const std::lock_guard lock(m_mutex);
+                const Mode before = m_away.setMode(*mode, *span);
+                until = m_away.modeUntil();
+                if (*mode == Mode::Home && before != Mode::Home)
+                    released = m_away.takeHeld("a draft");
+                syncInterval();
+            }
+            answer =
+                std::format("Mode: {}{}. Now {}.", modeName(*mode),
+                            until ? std::format(" until <t:{}:f>, then home", until) : std::string(), modeMeans(*mode));
+            if (!released.empty())
+                answer += std::format(" The {} posts that waited are drafts now.", released.size());
+            std::map<std::string, std::string> meta = {{"mode", modeName(*mode)}};
+            if (until)
+                meta["until"] = utcTime(until);
+            event = {std::format("The owner's mode is {}{}: {}.", modeName(*mode),
+                                 until ? " until " + utcTime(until) + ", then home" : std::string(), modeMeans(*mode)),
+                     meta};
+        }
+    } else if (name == "approver off") {
+        const std::lock_guard lock(m_mutex);
+        if (m_away.clearApprover()) {
+            answer = "No approver now: only your check mark posts my drafts.";
+            event = {"The owner took the approver off: only his check mark posts a draft.", {{"approver", "none"}}};
+        } else {
+            answer = "There was no approver.";
+        }
     } else if (!target || target == m_config.owner || target == m_me) {
         answer = "Name a member other than the owner and Nocti.";
     } else if (name == "trust") {
@@ -708,6 +859,19 @@ void Bot::interaction(const Json& data)
         change = {std::format("The owner allowed {} ({}) {}.", targetName, target,
                               seconds ? "until " + utcTime(m_now() + seconds) : "for good"),
                   "allowed"};
+    } else if (name == "approver on") {
+        const std::map<std::string, std::int64_t> spans = {{"2h", 7200}, {"1d", 86400}, {"7d", 604800}};
+        const std::int64_t seconds = spans.contains(time) ? spans.at(time) : 86400;
+        const std::lock_guard lock(m_mutex);
+        m_away.setApprover(target, seconds);
+        const std::int64_t until = m_away.approverUntil();
+        answer = std::format(
+            "<@{}> approves my drafts too until <t:{}:f>: a copy goes to their DMs, and the first "
+            "answer decides. Away from home, a post is their draft at once.",
+            target, until);
+        event = {std::format("The owner made {} ({}) an approver until {}: each draft goes to their DMs too.",
+                             targetName, target, utcTime(until)),
+                 {{"approver", std::to_string(target)}, {"until", utcTime(until)}}};
     } else if (name == "unfreeze") {
         const std::lock_guard lock(m_mutex);
         answer = m_people.unfreeze(target) ? std::format("<@{}>'s ice is over; their strikes stay.", target)
@@ -726,6 +890,9 @@ void Bot::interaction(const Json& data)
               {"data", {{"content", answer}, {"flags", 64}, {"allowed_mentions", {{"parse", Json::array()}}}}}});
     if (change)
         notice(change->first, {{"user", targetName}, {"user_id", std::to_string(target)}, {"trust", change->second}});
+    if (event)
+        notice(event->first, event->second);
+    releaseHeld(std::move(released));
 }
 
 // ── The tools ─────────────────────────────────────────────────────────────
@@ -761,7 +928,9 @@ void Bot::registerTools()
     m_mcp.addTool({"discord_post",
                    "Posts text to a channel through a draft: the draft goes to the owner's DMs, and only his "
                    "check mark posts it (his cross drops it). Waits up to wait seconds (300) for his answer; "
-                   "a draft still waiting comes back with its id for discord_post_status.",
+                   "a draft still waiting comes back with its id for discord_post_status. Away from home "
+                   "(/nocti mode), it is held until he is home (status held, a mark), or with direct queued for "
+                   "the interval's turn (status queued, a mark).",
                    {{"type", "object"},
                     {"properties",
                      {{"channel", id},
@@ -820,6 +989,11 @@ void Bot::registerTools()
             {"kind", {{"type", "string"}, {"enum", {"harness", "owner-call", "secret", "abuse", "injection"}}}}}},
           {"required", {"channel", "message", "kind"}}},
          wrap(&Bot::freeze)});
+    m_mcp.addTool({"discord_cancel",
+                   "Takes back, by the mark discord_post gave, a post queued for its turn or held until the owner "
+                   "is home, before it goes; one that left already is an error saying how.",
+                   {{"type", "object"}, {"properties", {{"mark", {{"type", "string"}}}}}, {"required", {"mark"}}},
+                   wrap(&Bot::cancel)});
     m_mcp.addTool({"discord_allowed",
                    "Who the owner trusts and allowed, and until when.",
                    {{"type", "object"}, {"properties", Json::object()}},
@@ -901,37 +1075,34 @@ Json Bot::post(const Json& arguments)
         throw ToolError(std::format("channel {} is not one Nocti may post in (NOCTI_CHANNELS)", channel));
     if (arguments.value("direct", false))
         return postDirect(channel, replyTo, text);
-    const auto info = channelInfo(channel);
-    if (!info)
-        throw ToolError(std::format("channel {} cannot be seen by Nocti", channel));
-    const Snowflake dm = ownerDm();
-    if (!dm)
-        throw ToolError("Discord gave no DM channel with the owner (does he share a server with Nocti?)");
-
-    std::string where = info->type == 1 ? "a DM" : std::format("<#{}>", channel);
-    if (replyTo)
-        where += std::format(", replying to [this message]({})", link(info->guild, channel, replyTo));
-    const Json card = {{"title", "Draft: react ✅ to post it, ❌ to drop it"},
-                       {"description", "In " + where + "."},
-                       {"color", Brand::Blue},
-                       {"footer", {{"text", "Nocti · nothing goes out without your check mark"}}}};
-    const DiscordResult sent = rest(
-        "POST", std::format("/channels/{}/messages", dm),
-        Json{{"content", text}, {"embeds", Json::array({card})}, {"allowed_mentions", {{"parse", Json::array()}}}});
-    const Snowflake draftId = idOf(sent.body, "id");
-    if (!sent.ok() || !draftId)
-        throw ToolError(
-            std::format("the draft did not reach the owner's DMs ({}): he must share a server with Nocti and "
-                        "let its members send him DMs",
-                        sent.status));
-    for (const auto& emoji : {Approve, Refuse})
-        rest("PUT", std::format("/channels/{}/messages/{}/reactions/{}/@me", dm, draftId, percentEncode(emoji)));
+    const auto hold = [&](const std::string& why) -> Json {
+        const std::lock_guard lock(m_mutex);
+        Json out = {{"status", "held"},
+                    {"mark", m_away.hold(channel, replyTo, text)},
+                    {"mode", modeName(m_away.mode())},
+                    {"goes", "a draft once the owner is home"}};
+        if (const std::int64_t until = m_away.modeUntil())
+            out["home_at"] = utcTime(until);
+        if (!why.empty())
+            out["why"] = why;
+        return out;
+    };
+    bool away = false;
+    Snowflake approver = 0;
     {
         const std::lock_guard lock(m_mutex);
-        m_drafts[draftId] = {draftId, dm, channel, replyTo, text, "waiting", 0, {}};
-        m_ownMessages.insert(draftId);
+        away = m_away.away();
+        approver = m_away.approver();
     }
-    return postStatus({{"draft", std::to_string(draftId)}, {"wait", seconds}});
+    if (away && !approver)
+        return hold({});
+    const Made made = makeDraft(channel, replyTo, text, false);
+    if (!made.draft) {
+        if (away)
+            return hold(made.failure);
+        throw ToolError(made.failure);
+    }
+    return postStatus({{"draft", std::to_string(made.draft)}, {"wait", seconds}});
 }
 
 Json Bot::postStatus(const Json& arguments)
@@ -1087,8 +1258,20 @@ Json Bot::postDirect(Snowflake channel, Snowflake replyTo, const std::string& te
     }
     {
         const std::lock_guard lock(m_mutex);
-        if (const std::string refused = m_direct.refusal(answering); !refused.empty())
-            throw ToolError("not direct: " + refused + ". Send it as a draft (without direct).");
+        const std::string refused = m_direct.refusal(answering);
+        // Away, a post that takes the interval waits its turn, behind those queued before it.
+        if (m_away.away() && m_direct.takesInterval(answering)
+            && (refused.starts_with("the interval") || (refused.empty() && !m_away.queued().empty()))) {
+            const std::string mark = m_away.queue(channel, replyTo, text);
+            const std::size_t ahead = m_away.queued().size() - 1;
+            const std::int64_t at =
+                std::max(m_now(), m_direct.nextTurn()) + std::int64_t(ahead) * Away::AwayMinutes * 60;
+            return {{"status", "queued"}, {"mark", mark}, {"goes_at", utcTime(at)}, {"ahead", ahead}};
+        }
+        if (!refused.empty())
+            throw ToolError("not direct: " + refused
+                            + (m_away.away() ? ". The owner is away: without direct it waits for him."
+                                             : ". Send it as a draft (without direct)."));
     }
     Json body = {{"content", text}, {"allowed_mentions", {{"parse", Json::array()}, {"replied_user", false}}}};
     if (replyTo)
@@ -1264,6 +1447,242 @@ void Bot::saveExtras()
     for (const auto& [guild, role] : m_admins)
         admins[std::to_string(guild)] = std::to_string(role);
     writeFileAtomically(m_config.stateDir + "/admins.json", admins.dump() + "\n", "nocti");
+}
+
+// ── Modes, the approver, and the posts that wait ──────────────────────────
+
+Snowflake Bot::dmWith(Snowflake user)
+{
+    if (user == m_config.owner)
+        return ownerDm();
+    {
+        const std::lock_guard lock(m_mutex);
+        if (const auto it = m_dms.find(user); it != m_dms.end())
+            return it->second;
+    }
+    const DiscordResult result = rest("POST", "/users/@me/channels", Json{{"recipient_id", std::to_string(user)}});
+    const Snowflake dm = result.ok() ? idOf(result.body, "id") : 0;
+    if (dm) {
+        const std::lock_guard lock(m_mutex);
+        m_dms[user] = dm;
+    }
+    return dm;
+}
+
+void Bot::syncInterval()
+{
+    const std::lock_guard lock(m_mutex);
+    m_direct.setInterval(std::chrono::minutes(m_away.away() ? Away::AwayMinutes : m_config.directMinutes));
+}
+
+Bot::Made Bot::makeDraft(Snowflake channel, Snowflake replyTo, const std::string& text, bool silent)
+{
+    const auto info = channelInfo(channel);
+    if (!info)
+        return {0, std::format("channel {} cannot be seen by Nocti", channel)};
+    const Snowflake dm = ownerDm();
+    if (!dm)
+        return {0, "Discord gave no DM channel with the owner (does he share a server with Nocti?)"};
+    Snowflake approver = 0;
+    std::int64_t approverUntil = 0;
+    bool away = false;
+    {
+        const std::lock_guard lock(m_mutex);
+        approver = m_away.approver();
+        approverUntil = m_away.approverUntil();
+        away = m_away.away();
+    }
+    std::string where = info->type == 1 ? "a DM" : std::format("<#{}>", channel);
+    if (replyTo)
+        where += std::format(", replying to [this message]({})", link(info->guild, channel, replyTo));
+    // Sends one card with its two reactions; the message's id, or 0 and why not.
+    const auto send = [&](Snowflake to, const Json& card, bool quiet) -> std::pair<Snowflake, long> {
+        Json body = {{"content", text},
+                     {"embeds", Json::array({card})},
+                     {"allowed_mentions", {{"parse", Json::array()}}}};
+        if (quiet)
+            body["flags"] = Silent;
+        const DiscordResult sent = rest("POST", std::format("/channels/{}/messages", to), body);
+        const Snowflake id = sent.ok() ? idOf(sent.body, "id") : 0;
+        if (id)
+            for (const auto& emoji : {Approve, Refuse})
+                rest("PUT", std::format("/channels/{}/messages/{}/reactions/{}/@me", to, id, percentEncode(emoji)));
+        return {id, sent.status};
+    };
+    const Json copyCard = {{"title", "Draft: react ✅ to post it, ❌ to drop it"},
+                           {"description",
+                            std::format("In {}. You approve Nocti's drafts for <@{}> until <t:{}:f>; the first answer, "
+                                        "theirs or yours, decides.",
+                                        where, m_config.owner, approverUntil)},
+                           {"color", Brand::Blue},
+                           {"footer", {{"text", "Nocti · a copy for the approver"}}}};
+    Snowflake copyDm = 0;
+    Snowflake copy = 0;
+    // Away, the approver's copy goes first: one their DMs refuse leaves the post held.
+    if (approver && away) {
+        copyDm = dmWith(approver);
+        long status = 0;
+        if (copyDm)
+            std::tie(copy, status) = send(copyDm, copyCard, false);
+        if (!copy)
+            return {0, std::format("the approver's DMs refused the copy ({})", status)};
+        silent = true;
+    }
+    std::string description = "In " + where + ".";
+    if (approver)
+        description +=
+            std::format("\n<@{}> has a copy until <t:{}:f>; the first answer decides.", approver, approverUntil);
+    const Json card = {{"title", "Draft: react ✅ to post it, ❌ to drop it"},
+                       {"description", description},
+                       {"color", Brand::Blue},
+                       {"footer",
+                        {{"text",
+                          approver ? "Nocti · your check mark or the approver's posts it"
+                                   : "Nocti · nothing goes out without your check mark"}}}};
+    const auto [draftId, status] = send(dm, card, silent);
+    if (!draftId) {
+        if (copy)
+            rest("DELETE", std::format("/channels/{}/messages/{}", copyDm, copy));
+        return {0,
+                std::format("the draft did not reach the owner's DMs ({}): he must share a server with Nocti and "
+                            "let its members send him DMs",
+                            status)};
+    }
+    if (approver && !away) {
+        copyDm = dmWith(approver);
+        long copyStatus = 0;
+        if (copyDm)
+            std::tie(copy, copyStatus) = send(copyDm, copyCard, false);
+        if (!copy)
+            Log::info("nocti", "the approver's copy of draft {} failed ({})", draftId, copyStatus);
+    }
+    const std::lock_guard lock(m_mutex);
+    m_drafts[draftId] = {draftId, dm, channel, replyTo, text, "waiting", 0, {}, copyDm, copy, copy ? approver : 0};
+    m_ownMessages.insert(draftId);
+    if (copy) {
+        m_copies[copy] = draftId;
+        m_ownMessages.insert(copy);
+    }
+    return {draftId, {}};
+}
+
+Json Bot::cancel(const Json& arguments)
+{
+    const std::string mark = arguments.value("mark", "");
+    if (mark.empty())
+        throw ToolError("mark is needed");
+    const std::lock_guard lock(m_mutex);
+    const std::string why = m_away.cancel(mark);
+    if (why == "no such post")
+        throw ToolError(std::format("no post {} waits, nor left in the last day", mark));
+    if (!why.empty())
+        throw ToolError(std::format("post {} left already: {}", mark, why));
+    return {{"mark", mark}, {"status", "taken back"}};
+}
+
+void Bot::postQueued(const Waiting& waiting)
+{
+    Json body = {{"content", waiting.text}, {"allowed_mentions", {{"parse", Json::array()}, {"replied_user", false}}}};
+    if (waiting.replyTo)
+        body["message_reference"] = {{"message_id", std::to_string(waiting.replyTo)}, {"fail_if_not_exists", false}};
+    const DiscordResult result = rest("POST", std::format("/channels/{}/messages", waiting.channel), body);
+    const Snowflake posted = result.ok() ? idOf(result.body, "id") : 0;
+    std::map<std::string, std::string> meta = {{"kind", "queued"},
+                                               {"mark", waiting.mark},
+                                               {"channel", std::to_string(waiting.channel)}};
+    if (!posted) {
+        {
+            const std::lock_guard lock(m_mutex);
+            m_away.noteGone(waiting.mark, std::format("failed ({})", result.status));
+        }
+        meta["status"] = "failed";
+        m_mcp.channel(std::format("The queued post {} failed: Discord answered {}.", waiting.mark, result.status),
+                      meta);
+        return;
+    }
+    const auto info = channelInfo(waiting.channel);
+    const std::string where = link(info ? info->guild : 0, waiting.channel, posted);
+    {
+        const std::lock_guard lock(m_mutex);
+        m_ownMessages.insert(posted);
+    }
+    meta["status"] = "sent";
+    meta["message_id"] = std::to_string(posted);
+    m_mcp.channel(std::format("The queued post {} went at its turn: {}", waiting.mark, where), meta);
+}
+
+void Bot::releaseHeld(std::vector<Waiting> held)
+{
+    if (held.empty())
+        return;
+    std::string outcomes;
+    std::string summary;
+    int drafts = 0;
+    bool slept = false;
+    for (const auto& waiting : held) {
+        const bool asleep = waiting.mode == Mode::Asleep;
+        const Made made = makeDraft(waiting.channel, waiting.replyTo, waiting.text, asleep);
+        outcomes += outcomes.empty() ? "" : "; ";
+        if (made.draft) {
+            ++drafts;
+            slept = slept || asleep;
+            outcomes += std::format("{} is draft {}", waiting.mark, made.draft);
+            std::string preview = waiting.text.substr(0, Preview);
+            while (!preview.empty() && preview.size() < waiting.text.size()
+                   && (static_cast<unsigned char>(waiting.text[preview.size()]) & 0xC0) == 0x80)
+                preview.pop_back(); // no letter cut in half
+            std::replace(preview.begin(), preview.end(), '\n', ' ');
+            summary += std::format("\n- <#{}>: {}{}", waiting.channel, preview,
+                                   preview.size() < waiting.text.size() ? "…" : "");
+        } else {
+            {
+                const std::lock_guard lock(m_mutex);
+                m_away.noteGone(waiting.mark, "failed: " + made.failure);
+            }
+            outcomes += std::format("{} failed: {}", waiting.mark, made.failure);
+        }
+    }
+    // Asleep, the drafts woke no one: one summary does.
+    if (slept)
+        rest("POST", std::format("/channels/{}/messages", ownerDm()),
+             Json{{"content",
+                   std::format("While you were away, {} posts waited; they are drafts above now:{}", drafts, summary)},
+                  {"allowed_mentions", {{"parse", Json::array()}}}});
+    notice(
+        std::format("The owner is home: the {} posts that waited for him were released ({}).", held.size(), outcomes),
+        {{"held", "released"}});
+}
+
+void Bot::tick()
+{
+    if (m_passive)
+        return;
+    std::optional<Mode> ranOut;
+    std::optional<Snowflake> approverGone;
+    std::optional<Waiting> due;
+    std::vector<Waiting> held;
+    {
+        const std::lock_guard lock(m_mutex);
+        ranOut = m_away.ranOut();
+        approverGone = m_away.approverRanOut();
+        if (ranOut)
+            held = m_away.takeHeld("a draft");
+        syncInterval();
+        if (!m_away.queued().empty() && m_direct.refusal(std::nullopt).empty()) {
+            due = m_away.takeQueued("posted");
+            m_direct.record(std::nullopt);
+        }
+    }
+    if (ranOut)
+        notice(
+            std::format("The owner's mode {} ran out: he is home, and {}.", modeName(*ranOut), modeMeans(Mode::Home)),
+            {{"mode", "home"}});
+    if (approverGone)
+        notice(std::format("The approver {}'s time ran out: their answers count no more.", *approverGone),
+               {{"approver", "none"}});
+    if (due)
+        postQueued(*due);
+    releaseHeld(std::move(held));
 }
 
 Json Bot::allowed(const Json&)

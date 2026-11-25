@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <filesystem>
 #include <format>
 #include <sstream>
@@ -25,6 +26,7 @@ constexpr Snowflake Guild = 1;
 constexpr Snowflake General = 50;
 constexpr Snowflake Elsewhere = 60;
 constexpr Snowflake OwnerDm = 70;
+constexpr Snowflake ApproverDm = 75; ///< anyone else's DM with Nocti
 
 int nextStamp()
 {
@@ -46,6 +48,7 @@ struct World
     std::istringstream in;
     std::ostringstream out;
     McpServer mcp{{"nocti", "1", "", true, {"claude-code"}}, in, out};
+    std::atomic<std::int64_t> offset{0}; ///< seconds the tests moved the clock on
     std::unique_ptr<Bot> bot;
 
     explicit World(std::set<Snowflake> channels = {})
@@ -63,7 +66,13 @@ struct World
             [this](const HttpRequest& r) {
                 return discord(r);
             },
-            mcp);
+            mcp,
+            [this] {
+                return std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count()
+                    + offset.load();
+            });
         bot->pollInterval = std::chrono::milliseconds(10);
         bot->handle({"READY", {{"user", {{"id", std::to_string(Me)}}}, {"application", {{"id", std::to_string(Me)}}}}});
         bot->handle({"INTERACTION_CREATE", interactionOf(Owner, "allow", Allowed)});
@@ -89,7 +98,9 @@ struct World
         const std::string path = r.url.substr(std::string("https://discord.com/api/v10").size());
         const Json body = r.body.empty() ? Json() : Json::parse(r.body);
         if (path == "/users/@me/channels")
-            return json({{"id", std::to_string(OwnerDm)}, {"type", 1}});
+            return json(
+                {{"id", std::to_string(body.value("recipient_id", "") == std::to_string(Owner) ? OwnerDm : ApproverDm)},
+                 {"type", 1}});
         if (path.starts_with("/interactions/")) {
             interactionAnswers.push_back(body);
             return {204, {}, "", {}};
@@ -621,4 +632,214 @@ TEST(NoctiIce, HiddenLettersIceAnAllowedPerson)
     w.say(w.messageOf(Allowed, "<@900> plain now", General, true));
     for (const auto& event : w.events())
         EXPECT_NE(event["meta"]["kind"], "message");
+}
+
+// ── Modes and the approver ────────────────────────────────────────────────
+
+namespace {
+
+Json command(const Json& option, Snowflake asker = Owner)
+{
+    return {{"id", "3"},
+            {"token", "tok"},
+            {"type", 2},
+            {"guild_id", std::to_string(Guild)},
+            {"member", {{"user", {{"id", std::to_string(asker)}}}}},
+            {"data", {{"name", "nocti"}, {"options", Json::array({option})}}}};
+}
+
+Json modeCommand(const std::string& mode, const std::string& time = "", Snowflake asker = Owner)
+{
+    Json options = Json::array({{{"name", "mode"}, {"type", 3}, {"value", mode}}});
+    if (!time.empty())
+        options.push_back({{"name", "time"}, {"type", 3}, {"value", time}});
+    return command({{"name", "mode"}, {"type", 1}, {"options", options}}, asker);
+}
+
+Json approverCommand(bool on, Snowflake user = 0, const std::string& time = "")
+{
+    Json options = Json::array();
+    if (user)
+        options.push_back({{"name", "user"}, {"type", 6}, {"value", std::to_string(user)}});
+    if (!time.empty())
+        options.push_back({{"name", "time"}, {"type", 3}, {"value", time}});
+    return command({{"name", "approver"},
+                    {"type", 2},
+                    {"options", Json::array({{{"name", on ? "on" : "off"}, {"type", 1}, {"options", options}}})}});
+}
+
+std::vector<Json> postedTo(World& w, Snowflake channel)
+{
+    const std::lock_guard lock(w.mutex);
+    std::vector<Json> bodies;
+    for (const auto& [to, body] : w.posted)
+        if (to == channel)
+            bodies.push_back(body);
+    return bodies;
+}
+
+Snowflake firstIn(World& w, Snowflake channel)
+{
+    const std::lock_guard lock(w.mutex);
+    return w.messages[channel].empty() ? 0 : std::stoull(w.messages[channel][0]["id"].get<std::string>());
+}
+
+std::string answer(World& w)
+{
+    return w.interactionAnswers.back()["data"]["content"];
+}
+
+const std::string GeneralId = std::to_string(General);
+
+} // namespace
+
+TEST(NoctiModes, AtWorkAPostIsHeldUntilTheOwnerIsHome)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("work")});
+    EXPECT_NE(answer(w).find("Mode: work. Now no draft"), std::string::npos) << answer(w);
+    EXPECT_EQ(w.events().back()["meta"]["mode"], "work");
+    const Json held = w.bot->post({{"channel", GeneralId}, {"text", "The build is green."}, {"wait", 0}});
+    EXPECT_EQ(held["status"], "held");
+    EXPECT_EQ(held["mark"], "h1");
+    EXPECT_EQ(w.count(OwnerDm), 0u);
+    const Json owners = w.say(w.messageOf(Owner, "<@900> status?", General, true));
+    EXPECT_EQ(w.events().back()["meta"]["mode"], "work") << "each event says the mode";
+
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("home")});
+    EXPECT_NE(answer(w).find("The 1 posts that waited are drafts now"), std::string::npos) << answer(w);
+    const auto drafts = postedTo(w, OwnerDm);
+    ASSERT_EQ(drafts.size(), 1u);
+    EXPECT_EQ(drafts[0]["content"], "The build is green.");
+    EXPECT_FALSE(drafts[0].contains("flags")) << "work's drafts ping";
+    EXPECT_EQ(w.events().back()["meta"]["held"], "released");
+    try {
+        w.bot->cancel({{"mark", "h1"}});
+        FAIL() << "taken back after it left";
+    } catch (const ToolError& error) {
+        EXPECT_NE(std::string(error.what()).find("left already: a draft"), std::string::npos);
+    }
+}
+
+TEST(NoctiModes, AsleepTheHeldPostsComeAsSilentDraftsAndOneSummary)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("asleep", "8h")});
+    EXPECT_EQ(w.events().back()["meta"]["mode"], "asleep");
+    EXPECT_EQ(w.bot->post({{"channel", GeneralId}, {"text", "One."}, {"wait", 0}})["status"], "held");
+    EXPECT_EQ(w.bot->post({{"channel", GeneralId}, {"text", std::string(100, 'x')}, {"wait", 0}})["status"], "held");
+    w.bot->tick();
+    EXPECT_EQ(w.count(OwnerDm), 0u) << "not before its time";
+
+    w.offset += 8 * 3600;
+    w.bot->tick();
+    const auto dms = postedTo(w, OwnerDm);
+    ASSERT_EQ(dms.size(), 3u);
+    EXPECT_EQ(dms[0]["flags"], 4096);
+    EXPECT_EQ(dms[1]["flags"], 4096);
+    EXPECT_FALSE(dms[2].contains("flags")) << "the summary wakes him";
+    const std::string summary = dms[2]["content"];
+    EXPECT_NE(summary.find("2 posts waited"), std::string::npos) << summary;
+    EXPECT_NE(summary.find(std::string(80, 'x') + "…"), std::string::npos) << "a preview of 80";
+    bool ranOut = false;
+    for (const auto& event : w.events())
+        ranOut = ranOut || event["meta"].value("mode", "") == "home";
+    EXPECT_TRUE(ranOut);
+}
+
+TEST(NoctiModes, AwayADirectPostPastTheIntervalWaitsItsTurn)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("work")});
+    EXPECT_EQ(w.bot->post({{"channel", GeneralId}, {"text", "First."}, {"direct", true}})["status"], "sent");
+    const Json queued = w.bot->post({{"channel", GeneralId}, {"text", "Second."}, {"direct", true}});
+    EXPECT_EQ(queued["status"], "queued");
+    EXPECT_EQ(queued["ahead"], 0);
+    w.bot->tick();
+    EXPECT_EQ(w.count(General), 1u) << "the interval holds";
+
+    w.offset += 600; // away, the interval is 10 minutes
+    w.bot->tick();
+    EXPECT_EQ(w.count(General), 2u);
+    EXPECT_EQ(postedTo(w, General).back()["content"], "Second.");
+    EXPECT_EQ(w.events().back()["meta"]["kind"], "queued");
+    EXPECT_EQ(w.events().back()["meta"]["status"], "sent");
+    try {
+        w.bot->cancel({{"mark", queued["mark"]}});
+        FAIL() << "taken back after it went";
+    } catch (const ToolError& error) {
+        EXPECT_NE(std::string(error.what()).find("left already: posted"), std::string::npos);
+    }
+}
+
+TEST(NoctiModes, CancelTakesAWaitingPostBack)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("work")});
+    const std::string mark = w.bot->post({{"channel", GeneralId}, {"text", "Never mind."}, {"wait", 0}})["mark"];
+    EXPECT_EQ(w.bot->cancel({{"mark", mark}})["status"], "taken back");
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("home")});
+    EXPECT_EQ(w.count(OwnerDm), 0u);
+    EXPECT_THROW(w.bot->cancel({{"mark", mark}}), ToolError);
+    EXPECT_THROW(w.bot->cancel({{"mark", "q99"}}), ToolError);
+}
+
+TEST(NoctiModes, OnlyTheOwnerSetsTheMode)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("work", "", Trusted)});
+    EXPECT_NE(answer(w).find("Only <@100>"), std::string::npos);
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("work", "9d")});
+    EXPECT_NE(answer(w).find("7 days at most"), std::string::npos);
+    EXPECT_EQ(w.bot->post({{"channel", GeneralId}, {"text", "Hi."}, {"wait", 0}})["status"], "waiting");
+}
+
+TEST(NoctiApprover, TheFirstAnswerDecidesTheApproversToo)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", approverCommand(true, Stranger, "2h")});
+    EXPECT_EQ(w.events().back()["meta"]["approver"], std::to_string(Stranger));
+    const Json pending = w.bot->post({{"channel", GeneralId}, {"text", "Hi all."}, {"wait", 0}});
+    EXPECT_EQ(pending["status"], "waiting");
+    ASSERT_EQ(w.count(ApproverDm), 1u);
+    EXPECT_FALSE(postedTo(w, OwnerDm)[0].contains("flags")) << "at home the owner's draft pings";
+
+    ownerReacts(w, firstIn(w, OwnerDm), "✅", Stranger); // on the owner's draft: not theirs
+    EXPECT_EQ(w.count(General), 0u);
+    ownerReacts(w, firstIn(w, ApproverDm), "✅", Stranger);
+    EXPECT_EQ(w.count(General), 1u);
+    EXPECT_EQ(w.events().back()["meta"]["by"], "approver");
+    EXPECT_GE(w.edits.size(), 2u) << "both cards say it";
+    ownerReacts(w, firstIn(w, OwnerDm), "❌");
+    EXPECT_EQ(w.bot->postStatus({{"draft", pending["draft"]}, {"wait", 0}})["status"], "sent");
+}
+
+TEST(NoctiApprover, AwayTheirDraftComesAtOnceAndTheOwnersIsSilent)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", approverCommand(true, Stranger)});
+    w.bot->handle({"INTERACTION_CREATE", modeCommand("work")});
+    EXPECT_EQ(w.bot->post({{"channel", GeneralId}, {"text", "Hi."}, {"wait", 0}})["status"], "waiting");
+    {
+        const std::lock_guard lock(w.mutex);
+        std::vector<Snowflake> order;
+        for (const auto& [to, body] : w.posted)
+            order.push_back(to);
+        EXPECT_EQ(order, (std::vector<Snowflake>{ApproverDm, OwnerDm})) << "the copy goes first";
+    }
+    EXPECT_EQ(postedTo(w, OwnerDm)[0]["flags"], 4096);
+    w.bot->handle({"INTERACTION_CREATE", approverCommand(false)});
+    EXPECT_EQ(w.bot->post({{"channel", GeneralId}, {"text", "Later."}, {"wait", 0}})["status"], "held");
+}
+
+TEST(NoctiApprover, OnceTheirTimeRunsOutTheirAnswerCountsNoMore)
+{
+    World w;
+    w.bot->handle({"INTERACTION_CREATE", approverCommand(true, Stranger, "2h")});
+    w.bot->post({{"channel", GeneralId}, {"text", "Hi."}, {"wait", 0}});
+    w.offset += 7200;
+    ownerReacts(w, firstIn(w, ApproverDm), "✅", Stranger);
+    EXPECT_EQ(w.count(General), 0u);
+    w.bot->tick();
+    EXPECT_EQ(w.events().back()["meta"]["approver"], "none");
 }

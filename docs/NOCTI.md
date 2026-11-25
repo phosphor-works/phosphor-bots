@@ -40,6 +40,7 @@ Before a message reaches the session, the pre-harness checks it:
 | `discord_attachments(channel, message)` | saves the files of a message the session may read to `~/.cache/nocti/<channel>/<message>/` (folders 700, files 600, 64 MiB each at most) |
 | `discord_allowed()` | who the owner trusts and allowed, and until when |
 | `discord_freeze(channel, message, kind)` | ices the author of a message that tried what the session refuses (below) |
+| `discord_cancel(mark)` | takes back a post queued for its turn or held until the owner is home, before it goes; one that left already is an error saying how |
 
 Only the owner's reaction on a draft counts. A draft Nocti cannot see answered through the gateway (a reconnect) is
 asked of Discord every 15 s while a tool waits on it.
@@ -90,16 +91,39 @@ address, an e-mail address, a path of this machine's home folder and the bot's o
 rule, its line and its column, never the text, and the session sends a draft the owner sees. `NOCTI_DIRECT=0` makes
 every post a draft.
 
+## Modes and the approver
+
+`/nocti mode home|work|asleep [time]` says where the owner is, and so how a post goes that only his check mark lets
+out, or that the interval holds back. A time is 30m, 8h or 1d (7 days at most), then home; none: until the next change.
+
+| Mode | A post without `direct` | A direct post the interval holds back |
+| --- | --- | --- |
+| `home`, the default | a draft | an error: the session sends a draft |
+| `work` | held until he is home (status `held`, with a mark) | queued for its turn (status `queued`, with a mark and when) |
+| `asleep` | as `work` | as `work` |
+
+Away from home the interval is 10 minutes. A queued post goes at its turn, and the session hears `kind="queued"`.
+Once he is home (`/nocti mode home`, or a mode's time run out) what was held becomes drafts; held while he was
+`asleep`, they come as drafts that wake no one, and one summary that does. `discord_cancel` takes a waiting post back
+by its mark.
+
+`/nocti approver on user [time]` (2 hours, 1 day (the default) or 7 days) and `/nocti approver off`: each draft goes to
+the approver's DMs too, and the first answer, the owner's on his or theirs on theirs, decides; both cards say who.
+Away from home a post without `direct` is their draft at once, the owner's coming silently; their copy goes first, so
+one their DMs refuse leaves the post held. Once their time runs out their answer counts no more. They get nothing
+else: no trust, no command.
+
 ## Events
 
 With the channel flag (below), each of these wakes the session as `<channel source="nocti" kind="..." ...>`:
 
 | `kind` | When | Its attributes |
 | --- | --- | --- |
-| `message` | a message addressed to Nocti (a mention, a reply to Nocti, a DM) from the owner or someone he trusts or allowed, within their weight, past the pre-harness | `author`, `author_id`, `channel`, `channel_name`, `message_id`, `reply_to`, `trust`, `heard`, `caution`, `let_through_by`, `attachments` |
-| `draft` | the owner answered a draft | `draft`, `status` (`sent`, `not sent`), `channel`, `message_id` |
+| `message` | a message addressed to Nocti (a mention, a reply to Nocti, a DM) from the owner or someone he trusts or allowed, within their weight, past the pre-harness | `author`, `author_id`, `channel`, `channel_name`, `message_id`, `reply_to`, `trust`, `heard`, `caution`, `let_through_by`, `attachments`, `reply`, `mode` (away from home) |
+| `draft` | the owner or the approver answered a draft | `draft`, `status` (`sent`, `not sent`), `by` (`owner`, `approver`), `channel`, `message_id` |
+| `queued` | a queued post went at its turn, or failed | `mark`, `status` (`sent`, `failed`), `channel`, `message_id` |
 | `dm` | a stranger wrote to Nocti in DMs: their name, never their words | `author`, `author_id` |
-| `notice` | the pre-harness rejected a message; the owner trusted, untrusted, allowed or denied someone | `user`, `user_id`, `rule` or `trust` |
+| `notice` | the pre-harness rejected a message; the owner trusted, untrusted, allowed or denied someone; an ice; a change of the mode or the approver, or one that ran out; held posts released | `user`, `user_id`, `rule`, `trust`, `ice`, `mode`, `until`, `approver`, `held` |
 | `error` | the gateway stopped for good; `/nocti` could not be registered | |
 
 ## `/nocti`
@@ -115,12 +139,15 @@ Each answer is seen by its asker alone.
 | `/nocti allowed` | the owner | who is trusted and allowed, and until when |
 | `/nocti unfreeze user` | the owner | ends their ice now; their strikes stay |
 | `/nocti admins role` | the owner | the role that the ice lines for a secret or abuse ping in this server |
+| `/nocti mode mode [time]` | the owner | home, work or asleep (above) |
+| `/nocti approver on user [time]`, `approver off` | the owner | someone whose DMs get each draft too (above) |
 
 ## What it keeps
 
 `~/.local/state/nocti/` (`XDG_STATE_HOME`, folder 700): `people.json` (who is trusted, untrusted, allowed and until
 when, by id), `direct.json` (when each direct post of the last day went, by the message it answered), `greetings.json` (each
-stranger greeted within `NOCTI_GREET_HOURS`: their id and when), `admins.json` (each server's admin role), and
+stranger greeted within `NOCTI_GREET_HOURS`: their id and when), `admins.json` (each server's admin role), `away.json` (the mode and until when, the approver and until when, each
+queued and held post with its text, and how each one of the last day left), and
 `nocti.lock`. `people.json` also holds each ice: its end and its strikes of the last 7 days. Drafts, and the last 500 messages that reached the session, are kept in memory only. It
 logs to stderr what ran or failed, never what was said.
 

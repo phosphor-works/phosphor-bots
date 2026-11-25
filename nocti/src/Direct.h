@@ -6,10 +6,13 @@
 #include "Common.h"
 #include "People.h"
 
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Nocti {
 
@@ -51,6 +54,21 @@ public:
     /// How an answer to @p target goes, for the session: "direct, 3 left",
     /// "direct from 14:30 UTC (interval 30 min)", "a draft only: a stranger's message".
     std::string describe(const std::optional<Target>& target);
+    /// Away from home the interval is shorter.
+    void setInterval(std::chrono::minutes interval)
+    {
+        m_interval = interval;
+    }
+    /// Whether a post answering @p target takes the interval (no reply cap).
+    bool takesInterval(const std::optional<Target>& target) const
+    {
+        return needsInterval(target);
+    }
+    /// When the interval lets the next post of its own go.
+    std::int64_t nextTurn() const
+    {
+        return m_lastInterval + std::chrono::seconds(m_interval).count();
+    }
     /// The direct posts left for @p message, or -1 when it takes the interval.
     int left(const std::optional<Target>& target);
 

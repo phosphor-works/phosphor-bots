@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "Away.h"
 #include "Common.h"
 #include "Config.h"
 #include "Direct.h"
@@ -35,6 +36,9 @@ struct Draft
     std::string status = "waiting"; ///< waiting, sent, not sent
     Snowflake posted = 0;
     std::string link;
+    Snowflake copyDm = 0; ///< the approver's DM with Nocti, when a copy went
+    Snowflake copy = 0; ///< the copy in the approver's DMs
+    Snowflake approver = 0; ///< who got the copy
 };
 
 /// Nocti: a Claude Code session on Discord as a bot of its own. The session
@@ -72,6 +76,10 @@ public:
     nlohmann::json attachments(const nlohmann::json& arguments);
     nlohmann::json allowed(const nlohmann::json& arguments);
     nlohmann::json freeze(const nlohmann::json& arguments);
+    nlohmann::json cancel(const nlohmann::json& arguments);
+
+    /// Each few seconds: a mode or an approver that ran out, and the queue's turn.
+    void tick();
 
     /// The fixed line of an ice of @p kind (harness, owner-call, secret, abuse,
     /// injection), its pings with it; empty for a kind it does not know.
@@ -105,7 +113,7 @@ private:
     void reaction(const nlohmann::json& data);
     void interaction(const nlohmann::json& data);
     void registerCommands(Snowflake guild);
-    void decide(Snowflake draft, bool approved);
+    void decide(Snowflake draft, bool approved, Snowflake by);
     void checkDraft(Snowflake draft);
     nlohmann::json draftAnswer(const Draft& draft) const;
     /// What a reply to @p message in @p channel would answer, for the policy.
@@ -116,6 +124,18 @@ private:
     /// Posts an ice's line in reply to @p message and ices its author.
     nlohmann::json ice(Snowflake channel, Snowflake guild, Snowflake message, Snowflake author,
                        const std::string& kind);
+    struct Made
+    {
+        Snowflake draft = 0;
+        std::string failure;
+    };
+    /// A draft in the owner's DMs, and the approver's copy while there is one.
+    Made makeDraft(Snowflake channel, Snowflake replyTo, const std::string& text, bool silent);
+    Snowflake dmWith(Snowflake user);
+    void syncInterval();
+    void postQueued(const Waiting& waiting);
+    /// Makes drafts of the posts that waited for the owner to be home.
+    void releaseHeld(std::vector<Waiting> held);
     void loadExtras();
     void saveExtras();
 
@@ -132,6 +152,7 @@ private:
     std::condition_variable_any m_changed;
     People m_people;
     DirectPolicy m_direct;
+    Away m_away;
     Snowflake m_me = 0;
     Snowflake m_application = 0;
     Snowflake m_dm = 0;
@@ -144,6 +165,10 @@ private:
     std::map<Snowflake, std::int64_t> m_greeted; ///< a stranger's last greeting
     std::deque<std::int64_t> m_greetings; ///< everyone's, of the last hour
     std::map<Snowflake, Snowflake> m_admins; ///< server -> its admin role
+    std::map<Snowflake, Snowflake> m_copies; ///< an approver's copy -> its draft
+    std::map<Snowflake, Snowflake> m_dms; ///< a user -> Nocti's DM with them
+    std::thread m_ticker;
+    bool m_stopTicker = false;
     std::unique_ptr<Gateway> m_gateway;
 };
 
