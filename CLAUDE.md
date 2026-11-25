@@ -51,7 +51,6 @@ the Nix jobs are off. CI does not build with Clang or on FreeBSD: check those lo
 
 ## Rules
 
-- Land work through a pull request. The user merges.
 - A setting is an environment key with a default, read in the bot's `Config.cpp`. A `WISP_` or `GLIM_` key that the
   bot does not know stops it, and the log names the key. A new key goes in `KnownKeys`, the settings table of its
   `docs/` page and the `dist/freebsd/<bot>.env.sample`. The service reads the env file as shell, so a list
